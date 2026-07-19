@@ -6,8 +6,12 @@ This framework is built as a **modular Python package (SDK)**, allowing seamless
 
 ---
 
-## 🚀 Enterprise Key Features (v0.2.0)
+## 🚀 Enterprise Key Features (v0.3.0)
 
+* **👤 Human-in-the-Loop (HITL):** Approvals gate after the Architecture phase to prevent costly hallucinations before code generation begins.
+* **📂 Multi-file Architecture:** Generates entire microservices or component structures at once using dynamically mapped file trees.
+* **✨ Auto-Formatting & Linting:** Automatically runs native formatters (`black`, `prettier`, `gofmt`, `cargo fmt`) to ensure code matches industry standards.
+* **💾 Session Persistence (SQLite):** Remembers previous architecture specs and generated code so you can `--resume` and iteratively improve your project!
 * **🔌 IDE Integration (MCP Server):** Directly integrate the Swarm into Cursor, Claude Desktop, and Windsurf via the Model Context Protocol.
 * **🛡️ Secure Docker Sandboxing:** Execute unit tests and debug loops safely within isolated Docker containers to protect your local environment.
 * **💰 Cost & Token Tracking:** Real-time tracking and calculation of LLM API costs for every swarm session.
@@ -26,12 +30,14 @@ This framework is built as a **modular Python package (SDK)**, allowing seamless
                               │
                               ▼
                 ┌───────────────────────────┐
-                │     Step 1: Architect     │ (Designs plan & unit tests in language L)
+                │     Step 1: Architect     │ (Designs multi-file plan & tests in language L)
                 └─────────────┬─────────────┘
+                              │
+                        [ 👤 HITL Approval ]
                               │
                               ▼
                 ┌───────────────────────────┐
-                │  Step 2: Developers (||)  │ (Concurrently write draft code in L)
+                │  Step 2: Developers (||)  │ (Concurrently write draft code for ALL files)
                 │  [Gemini, Codex, Claude]  │
                 └─────────────┬─────────────┘
                               │
@@ -42,8 +48,10 @@ This framework is built as a **modular Python package (SDK)**, allowing seamless
                               │
                               ▼
                 ┌───────────────────────────┐
-                │    Step 4: Synthesizer    │ (Blends best designs into final)
+                │    Step 4: Synthesizer    │ (Blends best designs into final files)
                 └─────────────┬─────────────┘
+                              │
+                     [ ✨ Auto-Formatting ]
                               │
                               ▼
                 ┌───────────────────────────┐
@@ -54,8 +62,8 @@ This framework is built as a **modular Python package (SDK)**, allowing seamless
              Tests Failed         Tests Passed
                     │                   │
                     ▼                   ▼
-        ┌───────────────────────┐  [Completed Code & Tests]
-        │   Step 6: Debugger    │
+        ┌───────────────────────┐  [Completed Project]
+        │   Step 6: Debugger    │ (Saved to SQLite DB)
         └───────────┬───────────┘
                     ▲ (Fixes code and retries)
 ```
@@ -90,6 +98,12 @@ multicliswarm \
   --task "Write a python class to calculate the nth Fibonacci number using memoization, with validation." \
   --language "python" \
   --developer-engines "gemini,codex"
+```
+
+### 1.1 Resuming a Session (Iterative Development)
+You can build upon previous generation sessions (stored in `~/.multicliswarm.db`):
+```bash
+multicliswarm --resume "your-session-uuid-here" --task "Add a new method to clear the Fibonacci cache."
 ```
 
 ### 2. Web UI Dashboard Mode
@@ -139,7 +153,6 @@ result = orchestrator.run(
 )
 
 if result["success"]:
-    print(f"Generated File: {result['filename']}")
     print(f"Total Cost: ${result['cost_usd']:.4f}")
 ```
 
