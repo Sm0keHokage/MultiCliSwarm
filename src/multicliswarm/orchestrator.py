@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import re
+import uuid
 import subprocess
 import logging
 from typing import List, Dict, Any, Callable, Optional
@@ -9,31 +10,27 @@ from concurrent.futures import ThreadPoolExecutor
 
 from pydantic import ValidationError
 from .engines import get_engine, BaseEngine
-from .schemas import ArchitectResponse, estimate_cost
+from .schemas import ArchitectResponse, FileMap, estimate_cost
+from .db import save_session, get_session
 
 logger = logging.getLogger("multicliswarm.orchestrator")
 
 DEFAULT_TEST_CMDS = {
-    "python": "python3 -m unittest {test_filename}",
-    "javascript": "node {test_filename}",
-    "typescript": "ts-node {test_filename}",
-    "go": "go test -v",
+    "python": "python3 -m unittest discover",
+    "javascript": "npm test || node test_*.js",
+    "go": "go test -v ./...",
     "rust": "cargo test",
 }
 
-DEFAULT_EXTENSIONS = {
-    "python": ".py",
-    "javascript": ".js",
-    "typescript": ".ts",
-    "go": ".go",
-    "rust": ".rs",
-    "c++": ".cpp",
-    "java": ".java",
-    "ruby": ".rb",
-    "php": ".php"
+# Auto-formatters (Lint & Fix)
+FORMATTERS = {
+    "python": ["black .", "ruff check --fix ."],
+    "javascript": ["prettier --write .", "eslint --fix ."],
+    "typescript": ["prettier --write .", "eslint --fix ."],
+    "go": ["gofmt -w ."],
+    "rust": ["cargo fmt"]
 }
 
-# Supported docker images for safe execution
 DOCKER_IMAGES = {
     "python": "python:3.11-alpine",
     "javascript": "node:18-alpine",
@@ -62,12 +59,10 @@ def clean_code(code: str, language: str = "python") -> str:
     return code.strip()
 
 def run_in_docker(language: str, test_cmd: str, output_dir: str) -> subprocess.CompletedProcess:
-    """Executes the test command securely inside a Docker container."""
     lang_clean = language.lower().strip()
     image = DOCKER_IMAGES.get(lang_clean)
     
     if not image:
-        # Fallback to local if docker isn't configured for this language
         logger.warning(f"No Docker image configured for '{language}'. Running locally.")
         return subprocess.run(test_cmd, shell=True, capture_output=True, text=True, cwd=output_dir)
         
@@ -77,7 +72,7 @@ def run_in_docker(language: str, test_cmd: str, output_dir: str) -> subprocess.C
         "--network", "none",
         "--memory", "512m",
         "--cpus", "1.0",
-        "-v", f"{abs_dir}:/workspace:ro",
+        "-v", f"{abs_dir}:/workspace:rw",
         "-w", "/workspace",
         image,
         "sh", "-c", test_cmd
@@ -87,8 +82,6 @@ def run_in_docker(language: str, test_cmd: str, output_dir: str) -> subprocess.C
 
 
 class SwarmOrchestrator:
-    """Core SDK orchestrator for the Multi-CLI agent swarm supporting any language and safe execution."""
-    
     def __init__(
         self,
         architect_engine: str = "gemini",
@@ -102,7 +95,8 @@ class SwarmOrchestrator:
         debugger_model: Optional[str] = None,
         max_debug_cycles: int = 3,
         use_docker: bool = False,
-        callback: Optional[Callable[[str, str], None]] = None
+        callback: Optional[Callable[[str, str], None]] = None,
+        ask_approval: Optional[Callable[[str, ArchitectResponse], bool]] = None
     ):
         self.architect_engine_name = architect_engine
         self.architect_engine = get_engine(architect_engine, architect_model)
@@ -116,8 +110,8 @@ class SwarmOrchestrator:
         self.max_debug_cycles = max_debug_cycles
         self.use_docker = use_docker
         self.callback = callback
+        self.ask_approval = ask_approval
         
-        # Financial tracking
         self.total_cost = 0.0
 
     def _log(self, message: str, level: str = "info"):
@@ -134,33 +128,58 @@ class SwarmOrchestrator:
             self.callback(level, message)
 
     def _track_cost(self, engine_name: str, prompt: str, response: str):
-        """Rudimentary token cost estimator (approx 4 chars = 1 token)."""
         in_tokens = len(prompt) // 4
         out_tokens = len(response) // 4
         cost = estimate_cost(engine_name, in_tokens, out_tokens)
         self.total_cost += cost
+
+    def format_code(self, language: str, output_dir: str):
+        lang_clean = language.lower().strip()
+        cmds = FORMATTERS.get(lang_clean, [])
+        for cmd in cmds:
+            self._log(f"Running auto-formatter: {cmd}", "info")
+            try:
+                subprocess.run(cmd, shell=True, capture_output=True, cwd=output_dir)
+            except Exception as e:
+                self._log(f"Formatter {cmd} failed: {e}", "warning")
 
     def run(
         self,
         task: str,
         language: str = "python",
         output_dir: str = ".",
-        override_filename: Optional[str] = None,
-        test_cmd: Optional[str] = None
+        test_cmd: Optional[str] = None,
+        resume_session_id: Optional[str] = None
     ) -> Dict[str, Any]:
+        
         lang_norm = language.lower().strip()
-        self._log(f"Starting Multi-CLI Swarm for language: '{language}' and task: '{task}'")
         self.total_cost = 0.0
         
+        session_id = resume_session_id or str(uuid.uuid4())
+        previous_context = ""
+        
+        if resume_session_id:
+            old_session = get_session(resume_session_id)
+            if old_session:
+                self._log(f"Resuming session {resume_session_id}...", "info")
+                previous_context = f"\nPrevious Specification:\n{old_session['specification']}\n"
+                for fname, content in old_session['final_files'].items():
+                    previous_context += f"\nPrevious Code for {fname}:\n```{lang_norm}\n{content}\n```\n"
+
+        self._log(f"Starting Multi-CLI Swarm (Session: {session_id})", "info")
+        
         # --- 1. ARCHITECT ---
-        self._log(f"Phase 1: Architect (Designing {language} system and tests)", "step")
+        self._log(f"Phase 1: Architect (Designing Multi-File {language} system)", "step")
         schema_json = ArchitectResponse.model_json_schema()
+        
         architect_prompt = f"""
         You are the Lead Architect in a cooperative software engineering swarm.
-        Your task is to design a complete development plan and specification for the following request in {language}:
+        Your task is to design a complete development plan and multi-file architecture for the following request in {language}:
         "{task}"
         
-        You MUST output a valid JSON object matching this schema exactly:
+        {previous_context}
+        
+        You MUST output a valid JSON object matching this exact Pydantic schema:
         {json.dumps(schema_json, indent=2)}
         """
         
@@ -168,203 +187,152 @@ class SwarmOrchestrator:
         self._track_cost(self.architect_engine_name, architect_prompt, arch_output_raw)
         
         raw_dict = extract_json_from_text(arch_output_raw)
-        
         try:
-            # Pydantic Phase 1 Validation
             arch_response = ArchitectResponse(**raw_dict)
         except ValidationError as e:
             self._log(f"Architect JSON validation failed: {e}", "error")
             raise RuntimeError(f"Architect returned invalid schema: {e}")
             
         spec = arch_response.specification
-        test_code = arch_response.test_code
-        filename = override_filename or arch_response.filename
+        files_map = arch_response.files
         
-        # Determine test filename
-        ext = os.path.splitext(filename)[1]
-        base = os.path.splitext(filename)[0]
-        test_filename = f"test_{base}{ext}"
-        if lang_norm == "go":
-            test_filename = f"{base}_test.go"
-        elif lang_norm == "rust":
-            test_filename = f"tests.rs"
-            
-        self._log(f"Architect generated specification. Filename target: {filename}", "success")
-
-        # --- 2. PARALLEL DEVELOPERS ---
-        self._log(f"Phase 2: Developers (Running {len(self.developer_engines_names)} in parallel)", "step")
+        self._log(f"Architect mapped {len(files_map)} files to create.", "success")
         
-        def run_developer(index: int, engine_name: str) -> Dict[str, Any]:
-            dev_prompt = f"""
-            You are a highly skilled Senior Software Engineer in a cooperative swarm.
-            Based on the following system specification, write the complete, optimal {language} implementation:
-            
-            {spec}
-            
-            Requirements:
-            1. Write the code to be saved in '{filename}'.
-            2. Ensure proper imports, robust error handling, and logical flow.
-            3. Output ONLY the raw {language} code. Do not write explanation, introductory text, or markdown code blocks. Just return the runnable code.
-            """
-            self._log(f"Developer {index+1} ({engine_name}) starting...")
-            try:
-                engine = get_engine(engine_name)
-                code_raw = engine.execute(dev_prompt)
-                code = clean_code(code_raw, language)
-                self._track_cost(engine_name, dev_prompt, code_raw)
-                self._log(f"Developer {index+1} ({engine_name}) finished.", "success")
-                return {"index": index, "engine": engine_name, "code": code}
-            except Exception as e:
-                self._log(f"Developer {index+1} ({engine_name}) failed: {e}", "error")
-                return {"index": index, "engine": engine_name, "code": None, "error": str(e)}
+        # Human-in-the-Loop
+        if self.ask_approval:
+            approved = self.ask_approval(task, arch_response)
+            if not approved:
+                self._log("Task cancelled by user during Architect approval gate.", "warning")
+                return {"success": False, "status": "cancelled"}
 
-        drafts = []
-        with ThreadPoolExecutor(max_workers=len(self.developer_engines_names)) as executor:
-            futures = [
-                executor.submit(run_developer, i, eng_name) 
-                for i, eng_name in enumerate(self.developer_engines_names)
-            ]
-            for fut in futures:
-                drafts.append(fut.result())
+        final_files_content = {}
+        
+        # --- Multi-File Generation Loop ---
+        for fmap in files_map:
+            fname = fmap.filepath
+            self._log(f"Generating file: {fname} (Test: {fmap.is_test})", "step")
+            
+            # --- 2. PARALLEL DEVELOPERS ---
+            def run_developer(index: int, engine_name: str) -> Dict[str, Any]:
+                dev_prompt = f"""
+                You are a highly skilled Senior Software Engineer.
+                System Specification:
+                {spec}
                 
-        successful_drafts = [d for d in drafts if d["code"]]
-        if not successful_drafts:
-            raise RuntimeError("All developer agents failed to generate code.")
+                Your Current Task:
+                Write ONLY the complete, optimal {language} code for the file: '{fname}'.
+                Description: {fmap.description}
+                
+                Output ONLY the raw {language} code without explanation or markdown blocks.
+                """
+                self._log(f"Developer {index+1} ({engine_name}) drafting {fname}...")
+                try:
+                    engine = get_engine(engine_name)
+                    code_raw = engine.execute(dev_prompt)
+                    code = clean_code(code_raw, language)
+                    self._track_cost(engine_name, dev_prompt, code_raw)
+                    return {"index": index, "engine": engine_name, "code": code}
+                except Exception as e:
+                    return {"index": index, "engine": engine_name, "code": None, "error": str(e)}
+
+            drafts = []
+            with ThreadPoolExecutor(max_workers=len(self.developer_engines_names)) as executor:
+                futures = [executor.submit(run_developer, i, eng_name) for i, eng_name in enumerate(self.developer_engines_names)]
+                for fut in futures:
+                    drafts.append(fut.result())
+                    
+            successful_drafts = [d for d in drafts if d["code"]]
+            if not successful_drafts:
+                raise RuntimeError(f"All developers failed to generate {fname}.")
+
+            # --- 3. PEER REVIEWER ---
+            review_context = "".join([f"### Draft {sd['index'] + 1}\n```{lang_norm}\n{sd['code']}\n```\n" for sd in successful_drafts])
+            reviewer_prompt = f"Analyze these drafts for '{fname}' based on spec:\n{spec}\n\nDrafts:\n{review_context}\nProvide strict critique and synthesis advice."
+            review_feedback = self.reviewer_engine.execute(reviewer_prompt)
+            self._track_cost(self.reviewer_engine_name, reviewer_prompt, review_feedback)
+
+            # --- 4. SYNTHESIZER ---
+            synth_prompt = f"Synthesize the absolute best code for '{fname}'.\nSpec:\n{spec}\n\nDrafts:\n{review_context}\nReviewer Feedback:\n{review_feedback}\nOutput ONLY raw code."
+            final_code_raw = self.synthesizer_engine.execute(synth_prompt)
+            self._track_cost(self.synthesizer_engine_name, synth_prompt, final_code_raw)
+            final_code = clean_code(final_code_raw, language)
             
-        self._log(f"Gathered {len(successful_drafts)} successful draft solutions.", "success")
+            # Save to disk
+            fpath = os.path.join(output_dir, fname)
+            os.makedirs(os.path.dirname(fpath) or ".", exist_ok=True)
+            with open(fpath, "w") as f:
+                f.write(final_code)
+                
+            final_files_content[fname] = final_code
+            self._log(f"Synthesized {fname} successfully.", "success")
 
-        # --- 3. PEER REVIEWER ---
-        self._log("Phase 3: Peer Reviewer (Analyzing and finding edge cases)", "step")
-        review_context = ""
-        for sd in successful_drafts:
-            review_context += f"### Draft {sd['index'] + 1} (Engine: {sd['engine']})\n```{lang_norm}\n{sd['code']}\n```\n\n"
-            
-        reviewer_prompt = f"""
-        You are the Quality Assurance lead and Peer Reviewer in a cooperative swarm.
-        Your task is to analyze these {len(successful_drafts)} alternative draft solutions created in {language} for the specification.
-        
-        Specification:
-        {spec}
-        
-        Drafts:
-        {review_context}
-        
-        Analyze:
-        1. Which solution has the most robust implementation and why?
-        2. Are there any edge cases, performance issues, or security flaws in any draft?
-        3. How can we integrate the best features of each draft into a single, flawless master code?
-        
-        Output a detailed review and synthesis guideline.
-        """
-        
-        review_feedback = self.reviewer_engine.execute(reviewer_prompt)
-        self._track_cost(self.reviewer_engine_name, reviewer_prompt, review_feedback)
-        self._log("Reviewer completed analysis.", "success")
+        # --- AUTO-FORMATTING ---
+        self.format_code(language, output_dir)
 
-        # --- 4. SYNTHESIZER ---
-        self._log("Phase 4: Synthesizer (Combining best approaches)", "step")
-        synth_prompt = f"""
-        You are the Master Code Integrator in a cooperative swarm.
-        Your task is to write the absolute best, final {language} code for '{filename}' by integrating the best design choices from the draft solutions and incorporating the reviewer's feedback.
-        
-        Specification:
-        {spec}
-        
-        Drafts:
-        {review_context}
-        
-        Reviewer Feedback:
-        {review_feedback}
-        
-        Requirements:
-        1. Produce a complete, working {language} implementation.
-        2. Output ONLY the raw {language} code. Absolutely no markdown blocks, no markdown wrappers, and no commentary. The output must be directly writable to a file and run.
-        """
-        
-        final_code_raw = self.synthesizer_engine.execute(synth_prompt)
-        self._track_cost(self.synthesizer_engine_name, synth_prompt, final_code_raw)
-        final_code = clean_code(final_code_raw, language)
-        
-        final_file_path = os.path.join(output_dir, filename)
-        with open(final_file_path, "w") as f:
-            f.write(final_code)
-        self._log(f"Final synthesized code saved to {final_file_path}.", "success")
-
-        # --- 5. VERIFICATION & AUTO-DEBUGGING LOOP ---
-        self._log("Phase 5: Verification & Auto-Debugging Loop", "step")
-        test_file_path = os.path.join(output_dir, test_filename)
-        test_code_clean = clean_code(test_code, language)
-        with open(test_file_path, "w") as f:
-            f.write(test_code_clean)
-        self._log(f"Unit tests saved to {test_file_path}.", "success")
-        
-        raw_test_cmd = test_cmd or DEFAULT_TEST_CMDS.get(lang_norm, "echo 'No test command specified'")
-        cmd_to_run = raw_test_cmd.format(test_filename=test_filename, filename=filename)
+        # --- 5. VERIFICATION & DEBUGGING ---
+        self._log("Phase 5: Global Verification & Auto-Debugging", "step")
+        raw_test_cmd = test_cmd or DEFAULT_TEST_CMDS.get(lang_norm, "echo 'No tests run'")
         
         tests_passed = False
         for cycle in range(1, self.max_debug_cycles + 1):
             self._log(f"Validation Cycle {cycle} of {self.max_debug_cycles}...")
-            self._log(f"Running test command: {cmd_to_run} (Docker: {self.use_docker})")
             
             if self.use_docker:
-                test_result = run_in_docker(language, cmd_to_run, output_dir)
+                test_result = run_in_docker(language, raw_test_cmd, output_dir)
             else:
-                test_result = subprocess.run(cmd_to_run, shell=True, capture_output=True, text=True, cwd=output_dir)
+                test_result = subprocess.run(raw_test_cmd, shell=True, capture_output=True, text=True, cwd=output_dir)
             
             if test_result.returncode == 0:
                 self._log(f"All tests PASSED successfully in cycle {cycle}!", "success")
                 tests_passed = True
                 break
             else:
-                self._log(f"Tests FAILED in cycle {cycle} (Exit Code: {test_result.returncode})", "warning")
-                
+                self._log(f"Tests FAILED (Exit Code: {test_result.returncode})", "warning")
                 if cycle == self.max_debug_cycles:
-                    self._log("Reached maximum debug cycles. Verification failed.", "error")
                     break
                     
-                self._log("Invoking Debugger to repair the implementation...")
+                self._log("Invoking Debugger on failing files...")
+                current_state = "".join([f"### File: {fn}\n```{lang_norm}\n{fc}\n```\n" for fn, fc in final_files_content.items()])
+                
                 debug_prompt = f"""
-                You are an expert Test-Driven Developer and Debugger.
-                The {language} implementation file '{filename}' failed its unit tests '{test_filename}'.
+                You are an expert Debugger. 
+                The project failed its test suite.
                 
-                Current Implementation Code:
-                ```{lang_norm}
-                {final_code}
-                ```
+                Current Project Files:
+                {current_state}
                 
-                Unit Test Code:
-                ```{lang_norm}
-                {test_code_clean}
-                ```
-                
-                Test Failure / Traceback Output:
+                Test Failure Traceback:
                 {test_result.stderr or test_result.stdout}
                 
-                Your Task:
-                Identify the precise bugs causing the failures and fix them. Return the complete corrected {language} code.
-                Output ONLY the raw {language} code. Absolutely no markdown backticks, no explanations, and no headers.
+                Analyze the error and provide the COMPLETE fixed code for the ONE OR MORE files that caused the failure.
+                Output valid JSON mapping filename -> fixed code. Example: {{"src/main.py": "new code..."}}
                 """
-                
                 try:
-                    fixed_code_raw = self.debugger_engine.execute(debug_prompt)
-                    self._track_cost(self.debugger_engine_name, debug_prompt, fixed_code_raw)
-                    final_code = clean_code(fixed_code_raw, language)
-                    with open(final_file_path, "w") as f:
-                        f.write(final_code)
-                    self._log(f"Saved debugged code iteration to {final_file_path}.", "success")
+                    fixed_dict_raw = self.debugger_engine.execute(debug_prompt)
+                    self._track_cost(self.debugger_engine_name, debug_prompt, fixed_dict_raw)
+                    fixed_dict = extract_json_from_text(fixed_dict_raw)
+                    
+                    for fn, new_code in fixed_dict.items():
+                        if fn in final_files_content:
+                            final_files_content[fn] = clean_code(new_code, language)
+                            fpath = os.path.join(output_dir, fn)
+                            with open(fpath, "w") as f:
+                                f.write(final_files_content[fn])
+                            self._log(f"Debugger patched {fn}.", "success")
+                            
+                    self.format_code(language, output_dir)
                 except Exception as e:
-                    self._log(f"Debugger execution failed: {e}. Exiting debug loop.", "error")
+                    self._log(f"Debugger execution failed: {e}", "error")
                     break
 
         self._log(f"Total Swarm Cost Estimate: ${self.total_cost:.5f} USD", "info")
 
+        # Save to SQLite
+        save_session(session_id, task, language, spec, files_map, final_files_content, self.total_cost)
+
         return {
+            "session_id": session_id,
             "success": tests_passed,
-            "filename": filename,
-            "code": final_code,
-            "test_filename": test_filename,
-            "test_code": test_code_clean,
-            "specification": spec,
-            "review": review_feedback,
+            "files": final_files_content,
             "cost_usd": self.total_cost
         }

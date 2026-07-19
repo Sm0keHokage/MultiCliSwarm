@@ -3,6 +3,7 @@ import argparse
 import logging
 from .orchestrator import SwarmOrchestrator
 from .engines import register_custom_engine
+from .schemas import ArchitectResponse
 
 # ANSI colors for pretty terminal prints
 class Colors:
@@ -22,12 +23,23 @@ def setup_logging():
         handlers=[logging.StreamHandler(sys.stdout)]
     )
 
+def ask_approval_cli(task: str, arch_response: ArchitectResponse) -> bool:
+    print(f"\n{Colors.HEADER}{Colors.BOLD}=== HUMAN-IN-THE-LOOP APPROVAL ==={Colors.ENDC}")
+    print(f"{Colors.BLUE}Task:{Colors.ENDC} {task}")
+    print(f"\n{Colors.CYAN}Files to generate:{Colors.ENDC}")
+    for f in arch_response.files:
+        print(f"  - {f.filepath} (Test: {f.is_test}): {f.description}")
+    
+    print(f"\n{Colors.WARNING}Do you approve this architecture plan? (y/n): {Colors.ENDC}", end="")
+    choice = input().strip().lower()
+    return choice == 'y' or choice == 'yes'
+
 def main():
-    parser = argparse.ArgumentParser(description="Multi-CLI Swarm (Universal MARE Algorithm)")
+    parser = argparse.ArgumentParser(description="Multi-CLI Swarm (Universal MARE Algorithm v0.3.0)")
     
     parser.add_argument("--task", "-t", type=str, required=True, help="Description of the coding task.")
     parser.add_argument("--language", "-l", type=str, default="python", help="Target programming language (e.g. python, javascript, go, rust).")
-    parser.add_argument("--file-name", "-f", type=str, help="Output target filename. If not provided, Architect decides.")
+    parser.add_argument("--resume", type=str, help="Resume and iterate on a previous session ID.")
     
     # Engines
     parser.add_argument("--architect-engine", type=str, default="gemini", help="CLI engine for Architect role.")
@@ -42,12 +54,14 @@ def main():
         type=str,
         action="append",
         default=[],
-        help="Register a custom CLI engine. Format: 'name=command_template'. Example: -r 'ollama=ollama run llama3.1'"
+        help="Register a custom CLI engine. Format: 'name=command_template'."
     )
     
     # Options
-    parser.add_argument("--test-cmd", type=str, help="Command to run unit tests. Injected variables: {test_filename}, {filename}.")
+    parser.add_argument("--test-cmd", type=str, help="Custom command to run unit tests.")
     parser.add_argument("--max-debug-cycles", type=int, default=3, help="Maximum number of test-debug-fix cycles.")
+    parser.add_argument("--use-docker", action="store_true", help="Run tests safely in isolated Docker containers.")
+    parser.add_argument("--auto-approve", action="store_true", help="Skip Human-in-the-Loop approval gate.")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose library logging.")
     
     args = parser.parse_args()
@@ -55,7 +69,6 @@ def main():
     if args.verbose:
         setup_logging()
         
-    # Process custom engine registrations
     for reg_str in args.register_engine:
         if "=" not in reg_str:
             print(f"{Colors.FAIL}[ERROR] Invalid custom engine format: '{reg_str}'. Must be 'name=command_template'{Colors.ENDC}")
@@ -65,7 +78,6 @@ def main():
         
     dev_engines = [e.strip() for e in args.developer_engines.split(",")]
     
-    # Beautiful CLI status printing callback
     def cli_callback(level: str, message: str):
         if level == "step":
             print(f"\n{Colors.HEADER}{Colors.BOLD}=== {message} ==={Colors.ENDC}")
@@ -86,24 +98,32 @@ def main():
             synthesizer_engine=args.synthesizer_engine,
             debugger_engine=args.debugger_engine,
             max_debug_cycles=args.max_debug_cycles,
-            callback=cli_callback
+            use_docker=args.use_docker,
+            callback=cli_callback,
+            ask_approval=None if args.auto_approve else ask_approval_cli
         )
         
         result = orchestrator.run(
             task=args.task,
             language=args.language,
-            override_filename=args.file_name,
-            test_cmd=args.test_cmd
+            test_cmd=args.test_cmd,
+            resume_session_id=args.resume
         )
         
+        if result.get("status") == "cancelled":
+            print(f"\n{Colors.WARNING}Session cancelled by user.{Colors.ENDC}")
+            sys.exit(0)
+            
         if result["success"]:
             print(f"\n{Colors.GREEN}{Colors.BOLD}🎉 Success! Code generated and fully verified.{Colors.ENDC}")
         else:
             print(f"\n{Colors.WARNING}{Colors.BOLD}⚠️ Completed, but tests did not pass completely.{Colors.ENDC}")
             
-        print(f"Implementation: {result['filename']}")
-        print(f"Unit Tests: {result['test_filename']}")
-        
+        print(f"\nSession ID: {result['session_id']}")
+        print("Generated Files:")
+        for fname in result['files']:
+            print(f" - {fname}")
+            
     except KeyboardInterrupt:
         print("\nAborted by user.")
         sys.exit(1)
