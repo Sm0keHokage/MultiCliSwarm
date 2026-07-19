@@ -6,35 +6,34 @@ This framework is built as a **modular Python package (SDK)**, allowing seamless
 
 ---
 
-## 🚀 Deep Engineering Features (v0.7.0)
+## 🚀 Production Release (v1.0.0)
 
-With the release of v0.7.0, Multi-CLI Swarm shifts focus from feature-breadth to deep engineering stability and cost-efficiency:
+Version 1.0.0 marks the transition to a high-performance, enterprise-ready autonomous developer ecosystem:
 
-* **💉 Surgical Patching:** The Debugger now generates minimal **Search/Replace blocks** (Unified Diffs) instead of rewriting entire files. This reduces token consumption by up to 90% and prevents "forgetting" bugs in large files.
-* **🛡️ Resilient Failover & Retries:** Every CLI engine is now wrapped with **Exponential Backoff retries**. If an engine hits a rate limit or network error, the Swarm automatically fails over to a secondary engine (e.g., failing over from Claude to Gemini) without aborting the session.
-* **🎯 CoT Prompt Determinism:** All prompts now use strict **Chain-of-Thought (CoT)** reasoning encapsulated in `<thinking>` XML tags. This forces the model to "plan" before outputting JSON, leading to nearly 100% deterministic schema adherence.
-* **🧪 Framework Unit Tests:** The SDK itself is now covered by a comprehensive **Pytest suite**, ensuring that RAG, SQLite persistence, and surgical patching work flawlessly across all versions.
-* **🛠️ Self-Evolving Tools:** The Swarm can write its own Python CLI tools on-the-fly and register them as engines!
-* **🤖 Pair Programming Mode:** Driver -> Navigator interactive coding between two models.
-* **🔁 CI/CD Autopilot (GitHub Actions):** Automatically fix GitHub issues labeled `swarm-autofix`.
-* **👁️ Visual QA (Headless Vision):** Playwright screenshots + Vision models for frontend verification.
-* **📦 Autonomous Package Management:** Auto-detects and installs dependencies inside Docker.
-* **🌐 Web Search RAG:** Pulls real-time API docs from DuckDuckGo.
-* **🐙 Git Autopilot:** Automated branching and Semantic Commits.
-* **🧠 Smart Codebase RAG:** Scans local projects to integrate new features into legacy code.
-* **🔀 Dynamic Smart Routing:** Automatically assigns cheap models for drafting and expensive models for architecture.
-* **🖋️ Interactive Web Diff-Editor:** Visually compare and tweak AI drafts in the browser.
+* **⚡ Semantic RAG (ChromaDB):** Efficiently indexes massive codebases and retrieves only the most relevant functions and files for each task using vector search.
+* **💎 Semantic Caching:** Saves up to 40% on token costs by caching and reusing AI reasonings for similar tasks using semantic similarity.
+* **🌿 Session Branching & Snapshots:** Non-destructive experimentation! Create snapshots of your session, try different architectures, and rollback instantly if a path leads to a dead end.
+* **💉 Surgical Patching:** Debugger generates minimal **Search/Replace blocks** (Unified Diffs) instead of rewriting files, ensuring precision in large projects.
+* **🛡️ Resilient Failover:** Automatic exponential backoff and engine-hopping (e.g., failing over from Claude to Gemini) for 100% uptime.
+* **🛠️ Self-Evolving Tools:** The Swarm writes its own Python CLI tools on-the-fly to solve complex environmental problems.
+* **🤖 Pair Programming Mode:** Driver -> Navigator interactive coding paradigm between AI agents.
+* **🔁 CI/CD Autopilot:** GitHub Action to automatically fix repo issues via labels.
+* **👁️ Visual QA:** Playwright-powered headless vision testing for frontend verification.
+* **🐙 Git Autopilot:** Fully automated branching, staging, and Semantic Commits.
+* **🌐 Web Search RAG:** Real-time API documentation retrieval from DuckDuckGo.
+* **👥 Team Spaces Web UI:** Multi-session dashboard with persistent history and interactive Monaco Editor.
+* **🛡️ Secure Docker Sandboxing:** Tests run in isolated Alpine containers.
 
 ---
 
 ## 📐 Swarm Pipeline
 
 ```
-          [User Task] + [RAG Context] + [Web Search Docs]
+          [User Task] + [Semantic RAG Context] + [Web Search Docs]
                               │
                               ▼
                 ┌───────────────────────────┐
-                │     Step 1: Architect     │ (Designs plan, CoT Thinking, Pydantic Schema)
+                │     Step 1: Architect     │ (Semantic Cache Lookup -> CoT Thinking)
                 └─────────────┬─────────────┘
                               │
                         [ 👤 HITL Approval ]
@@ -51,7 +50,7 @@ With the release of v0.7.0, Multi-CLI Swarm shifts focus from feature-breadth to
                               │
                               ▼
                 ┌───────────────────────────┐
-                │    Step 4: Synthesizer    │ (Blends best designs into final files)
+                │    Step 4: Synthesizer    │ (Blends designs -> [💾 Auto Snapshot])
                 └─────────────┬─────────────┘
                               │
                   [ 🖋️ Web Diff-Editor Approval ]
@@ -60,7 +59,7 @@ With the release of v0.7.0, Multi-CLI Swarm shifts focus from feature-breadth to
                               │
                               ▼
                 ┌───────────────────────────┐
-                │  Step 5: Test Execution   │ (Auto-Installs Packages & Runs tests in DOCKER)
+                │  Step 5: Test Execution   │ (Auto-Package Install -> DOCKER Sandbox)
                 └─────────────┬─────────────┘
                               │
                        [ 👁️ Visual QA ] (Playwright screenshots -> Vision Model)
@@ -79,42 +78,36 @@ With the release of v0.7.0, Multi-CLI Swarm shifts focus from feature-breadth to
 
 ---
 
-## 💻 Installation & Requirements
+## 💻 Installation
 
 ```bash
-# Clone the repo and install with dev dependencies
+# Clone the repo and install
 git clone https://github.com/Sm0keHokage/MultiCliSwarm.git
 cd MultiCliSwarm
-pip install -e .[dev]
+pip install -e .
+```
 
-# Run internal tests
-PYTHONPATH=src pytest tests/
+### Docker Deployment
+Run the entire ecosystem (Web UI + Services) with one command:
+```bash
+docker-compose up --build
 ```
 
 ---
 
-## ⚙️ Usage Modes
+## ⚙️ Usage
 
-### 1. Terminal CLI Mode
+### Terminal CLI
 ```bash
 multicliswarm \
-  --task "Add a delete method to the User model." \
-  --language "python" \
+  --task "Implement a secure rate-limiter middleware in Go." \
+  --language "go" \
   --auto-route \
-  --telemetry \
-  --context-dir "./src"
+  --semantic-rag \
+  --telemetry
 ```
 
-### 2. Team Spaces Web UI Dashboard
+### Team Dashboard
 ```bash
 multicliswarm-ui
-```
-
----
-
-## 🔌 Reliable Failover Configuration
-
-You can provide multiple engines separated by commas. The Swarm will try them in order if one fails:
-```bash
-multicliswarm --architect-engine "claude,gemini" --task "..."
 ```

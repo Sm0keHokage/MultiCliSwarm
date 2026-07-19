@@ -11,8 +11,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pydantic import ValidationError
 from .engines import get_engine, BaseEngine, register_custom_engine
 from .schemas import ArchitectResponse, FileMap, CustomToolRequest, estimate_cost, DebuggerResponse
-from .db import save_session, get_session
+from .db import save_session, get_session, create_snapshot, load_snapshot
 from .rag import get_codebase_context
+from .semantic_rag import CodeIndexer
+from .semantic_cache import SemanticCache
 from .telemetry import get_tracer
 from .web_search import search_web_docs
 from .visual_qa import take_screenshot_sync
@@ -116,6 +118,8 @@ class SwarmOrchestrator:
         auto_packages: bool = False,
         git_autopilot: bool = False,
         pair_programming: bool = False,
+        semantic_rag: bool = False,
+        semantic_cache: bool = False,
         callback: Optional[Callable[[str, str], None]] = None,
         ask_approval: Optional[Callable[[str, ArchitectResponse], bool]] = None,
         ask_code_approval: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None
@@ -144,12 +148,18 @@ class SwarmOrchestrator:
         self.auto_packages = auto_packages
         self.git_autopilot = git_autopilot
         self.pair_programming = pair_programming
+        self.semantic_rag_enabled = semantic_rag
+        self.semantic_cache_enabled = semantic_cache
         
         self.callback = callback
         self.ask_approval = ask_approval
         self.ask_code_approval = ask_code_approval
         
         self.total_cost = 0.0
+        
+        # Initialize Semantic Tools
+        self.cache = SemanticCache() if semantic_cache else None
+        self.indexer = CodeIndexer() if semantic_rag else None
 
     def _log(self, message: str, level: str = "info"):
         if level == "info":
@@ -200,6 +210,7 @@ class SwarmOrchestrator:
         output_dir: str = ".",
         test_cmd: Optional[str] = None,
         resume_session_id: Optional[str] = None,
+        resume_snapshot_id: Optional[str] = None,
         context_dir: Optional[str] = None
     ) -> Dict[str, Any]:
         with tracer.start_as_current_span("SwarmOrchestration") as span:
@@ -211,7 +222,15 @@ class SwarmOrchestrator:
             session_id = resume_session_id or str(uuid.uuid4())
             previous_context = ""
             
-            if resume_session_id:
+            # Load previous context from session or snapshot
+            if resume_snapshot_id:
+                snapshot = load_snapshot(resume_snapshot_id)
+                if snapshot:
+                    self._log(f"Restoring from snapshot {resume_snapshot_id}...", "info")
+                    previous_context = f"\nPrevious Specification:\n{snapshot['specification']}\n"
+                    for fname, content in snapshot['final_files'].items():
+                        previous_context += f"\nPrevious Code for {fname}:\n```{lang_norm}\n{content}\n```\n"
+            elif resume_session_id:
                 old_session = get_session(resume_session_id)
                 if old_session:
                     self._log(f"Resuming session {resume_session_id}...", "info")
@@ -219,14 +238,21 @@ class SwarmOrchestrator:
                     for fname, content in old_session['final_files'].items():
                         previous_context += f"\nPrevious Code for {fname}:\n```{lang_norm}\n{content}\n```\n"
 
+            # 1. RAG Context (Semantic or Standard)
             rag_context = ""
             if context_dir:
                 self._log(f"Scanning codebase context in {context_dir}...", "info")
                 with tracer.start_as_current_span("RAG_Context"):
-                    rag_context = get_codebase_context(context_dir)
+                    if self.semantic_rag_enabled:
+                        self.indexer.index_directory(context_dir)
+                        rag_context = self.indexer.query(task)
+                    else:
+                        rag_context = get_codebase_context(context_dir)
+                        
                     if rag_context:
                         rag_context = f"\n=== EXISTING CODEBASE CONTEXT ===\n{rag_context}\n=================================\n"
 
+            # 2. Web Search
             web_context = ""
             if self.web_search:
                 self._log("Fetching real-time documentation from Web...", "info")
@@ -254,18 +280,18 @@ class SwarmOrchestrator:
                 You MUST use the `<thinking>` tag to reason about the architecture before generating the JSON.
                 After thinking, output a valid JSON object matching this exact Pydantic schema:
                 {json.dumps(schema_json, indent=2)}
-                
-                Example format:
-                <thinking>
-                Analyzing requirements...
-                We need files X, Y, and Z.
-                </thinking>
-                ```json
-                {{ "specification": "...", "files": [...] }}
-                ```
                 """
                 
-                arch_output_raw = self.architect_engine.execute(architect_prompt)
+                # Try Semantic Cache first
+                arch_output_raw = None
+                if self.semantic_cache_enabled:
+                    arch_output_raw = self.cache.get(architect_prompt)
+                
+                if not arch_output_raw:
+                    arch_output_raw = self.architect_engine.execute(architect_prompt)
+                    if self.semantic_cache_enabled:
+                        self.cache.set(architect_prompt, arch_output_raw)
+                        
                 self._track_cost(self.architect_engine_name, architect_prompt, arch_output_raw)
                 
                 raw_dict = extract_json_from_text(arch_output_raw)
@@ -386,7 +412,6 @@ class SwarmOrchestrator:
                             except Exception as e:
                                 self._log(f"Visual QA analysis failed: {e}", "warning")
 
-            # --- 5. VERIFICATION & DEBUGGING (WITH SURGICAL PATCHING) ---
             with tracer.start_as_current_span("Phase_5_Verification"):
                 self._log("Phase 5: Global Verification & Auto-Debugging", "step")
                 raw_test_cmd = test_cmd or DEFAULT_TEST_CMDS.get(lang_norm, "echo 'No tests run'")
@@ -412,52 +437,39 @@ class SwarmOrchestrator:
                                 
                             self._log("Invoking Debugger to create Surgical Patches...")
                             current_state = "".join([f"### File: {fn}\n```{lang_norm}\n{fc}\n```\n" for fn, fc in final_files_content.items()])
-                            
                             debug_schema_json = DebuggerResponse.model_json_schema()
                             
                             debug_prompt = f"""
-                            You are an expert Debugger. The project failed its test suite or Visual QA checks.
+                            You are an expert Debugger. The project failed its test suite.
                             
                             Current Project Files:
                             {current_state}
                             
                             Test Failure Traceback:
                             {test_result.stderr or test_result.stdout}
-                            
                             {visual_issues}
                             
-                            Analyze the error and provide SURGICAL PATCHES to fix the failing files.
-                            Use `<thinking>` tags to explain the bug and your solution.
-                            Then output a JSON object matching this schema exactly:
+                            Provide SURGICAL PATCHES. Use `<thinking>`.
                             {json.dumps(debug_schema_json, indent=2)}
-                            
-                            Your `search` string must exactly match the text to be replaced (including indentation). Provide enough lines in `search` to make it unique.
                             """
                             try:
                                 fixed_dict_raw = self.debugger_engine.execute(debug_prompt)
                                 self._track_cost(self.debugger_engine_name, debug_prompt, fixed_dict_raw)
                                 fixed_dict = extract_json_from_text(fixed_dict_raw)
-                                
                                 debug_resp = DebuggerResponse(**fixed_dict)
                                 
                                 for p in debug_resp.patches:
                                     if p.filepath in final_files_content:
                                         old_content = final_files_content[p.filepath]
-                                        try:
-                                            new_content = apply_patch(old_content, p.blocks)
-                                            final_files_content[p.filepath] = new_content
-                                            fpath = os.path.join(output_dir, p.filepath)
-                                            with open(fpath, "w") as f:
-                                                f.write(new_content)
-                                            self._log(f"Debugger surgically patched {p.filepath}.", "success")
-                                        except ValueError as ve:
-                                            self._log(f"Failed to apply patch to {p.filepath}: {ve}", "error")
+                                        new_content = apply_patch(old_content, p.blocks)
+                                        final_files_content[p.filepath] = new_content
+                                        fpath = os.path.join(output_dir, p.filepath)
+                                        with open(fpath, "w") as f:
+                                            f.write(new_content)
+                                        self._log(f"Debugger surgically patched {p.filepath}.", "success")
                                             
                                 self.format_code(language, output_dir)
                                 visual_issues = ""
-                            except ValidationError as e:
-                                self._log(f"Debugger JSON validation failed: {e}", "error")
-                                break
                             except Exception as e:
                                 self._log(f"Debugger execution failed: {e}", "error")
                                 break
@@ -471,6 +483,10 @@ class SwarmOrchestrator:
 
             self._log(f"Total Swarm Cost Estimate: ${self.total_cost:.5f} USD", "info")
             span.set_attribute("cost_usd", self.total_cost)
+
+            # Auto-save snapshot after successful run
+            if tests_passed:
+                create_snapshot(session_id, f"Auto-save after: {task[:30]}", spec, final_files_content)
 
             save_session(session_id, task, language, spec, files_map, final_files_content, self.total_cost)
 

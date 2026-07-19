@@ -1,0 +1,9 @@
+.git
+__pycache__
+.multicliswarm_index
+.multicliswarm_cache
+.multicliswarm_tools
+*.pyc
+venv
+env
+.env

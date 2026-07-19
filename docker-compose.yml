@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  swarm-ui:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/app
+      - ~/.multicliswarm.db:/root/.multicliswarm.db
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: multicliswarm-ui

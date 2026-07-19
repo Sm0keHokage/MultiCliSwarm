@@ -4,10 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "multicliswarm"
-version = "0.7.0"
-description = "A Next-Gen Autonomous AI Ecosystem with Surgical Patching, Auto-Failover, and SOTA Prompt Determinism."
+version = "1.0.0"
+description = "Production-grade Next-Gen Autonomous AI Ecosystem with Semantic RAG, Caching, and Session Branching."
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
     {name = "Denis Sipicyn", email = "dshp@themezex.ru"}
@@ -29,7 +29,9 @@ dependencies = [
     "duckduckgo-search>=6.0.0",
     "playwright>=1.40.0",
     "PyGithub>=2.1.0",
-    "tenacity>=8.2.0"
+    "tenacity>=8.2.0",
+    "chromadb>=0.4.0",
+    "sentence-transformers>=2.2.0"
 ]
 
 [project.optional-dependencies]

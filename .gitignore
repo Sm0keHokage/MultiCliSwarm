@@ -36,8 +36,6 @@ venv.bak/
 .vscode/
 .DS_Store
 
-# Temporary generated test output files from swarm runs
-fibonacci.py
-test_fibonacci.py
-formatCurrency.js
-test_formatCurrency.js
+.multicliswarm_index/
+.multicliswarm_cache/
+.multicliswarm_tools/
