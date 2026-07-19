@@ -6,16 +6,16 @@ This framework is built as a **modular Python package (SDK)**, allowing seamless
 
 ---
 
-## 🚀 Key Features
+## 🚀 Enterprise Key Features (v0.2.0)
 
-* **🔑 Zero-Config Authentication:** Automatically uses your existing local authentication sessions from your CLI tools (`gemini`, `codex`, and `claude-code`). No API keys to configure!
+* **🔌 IDE Integration (MCP Server):** Directly integrate the Swarm into Cursor, Claude Desktop, and Windsurf via the Model Context Protocol.
+* **🛡️ Secure Docker Sandboxing:** Execute unit tests and debug loops safely within isolated Docker containers to protect your local environment.
+* **💰 Cost & Token Tracking:** Real-time tracking and calculation of LLM API costs for every swarm session.
+* **🌐 Web Dashboard (FastAPI + WebSockets):** Watch the agent swarm debate and code in real-time through an interactive web UI.
+* **✅ Pydantic Strict Validation:** All AI reasoning is strictly schema-validated to prevent parsing errors and hallucinations.
+* **🔑 Zero-Config Authentication:** Automatically uses your existing local authentication sessions from your CLI tools.
 * **🌍 Universal Language Support:** Fully language-agnostic. Generate and verify code for **Python, JS, TS, Go, Rust, C++, Java**, etc.
-* **🔌 Dynamic Custom CLI Engines:** Register *any* local command-line interface, local model (e.g. Ollama, Llama.cpp), or remote API wrapper as a dynamic engine!
-* **⚡ Concurrency:** Runs multiple Developer agents in parallel using Python thread pooling.
-* **🔎 Cooperative Peer Review:** Combines draft implementations and lets an independent reviewer critique the designs.
-* **🛡️ Self-Correction & Auto-Debugging:** Runs the generated unit tests locally, parses any tracebacks/errors, and executes an automated debugging cycle up to a set limit.
-* **🔌 Integrable SDK Architecture:** Exposes a clean, fully parameterizable public Python API with callbacks for integration into GUI apps, FastAPI microservices, or custom agents.
-* **🎨 Visually Rich Output:** Provides real-time ANSI-colored logs showing steps, milestones, review summaries, and error logs.
+* **🔌 Dynamic Custom CLI Engines:** Register *any* local command-line interface (e.g., Ollama, curl scripts) as a dynamic engine!
 
 ---
 
@@ -47,7 +47,7 @@ This framework is built as a **modular Python package (SDK)**, allowing seamless
                               │
                               ▼
                 ┌───────────────────────────┐
-                │  Step 5: Test Execution   │ (Runs native test command for language L)
+                │  Step 5: Test Execution   │ (Runs native test command in DOCKER container)
                 └─────────────┬─────────────┘
                               │
                     ┌─────────┴─────────┐
@@ -64,78 +64,72 @@ This framework is built as a **modular Python package (SDK)**, allowing seamless
 
 ## 💻 Installation & Requirements
 
-Ensure you have Python 3.8+ and at least one or more of the following CLI tools installed and authenticated:
+Ensure you have Python 3.8+ and at least one or more of the following CLI tools installed:
 1. **Gemini CLI** (`gemini`)
 2. **Codex CLI** (`codex`)
 3. **Claude Code** (`claude`)
 
 ### Installation (as a local package):
 ```bash
+# Clone the repo and install
+git clone https://github.com/Sm0keHokage/MultiCliSwarm.git
+cd MultiCliSwarm
 pip install -e .
 ```
 
 ---
 
-## ⚙️ Usage
+## ⚙️ Usage Modes
 
-You can execute the swarm using the local `run_swarm.py` runner or via the installed package command `multicliswarm`.
+The SDK provides multiple ways to interact with the Swarm.
 
-### Python Example:
+### 1. Terminal CLI Mode
+You can execute the swarm using the installed package command `multicliswarm`.
 ```bash
-./run_swarm.py \
+multicliswarm \
   --task "Write a python class to calculate the nth Fibonacci number using memoization, with validation." \
   --language "python" \
   --developer-engines "gemini,codex"
 ```
 
-### JavaScript Example:
+### 2. Web UI Dashboard Mode
+Start the live visual dashboard to interact with the swarm via your browser.
 ```bash
-./run_swarm.py \
-  --task "Write a JavaScript function to format money in cents to currency, with custom symbol placement." \
-  --language "javascript" \
-  --developer-engines "gemini,codex"
+multicliswarm-ui
+# Open http://127.0.0.1:8080 in your browser
 ```
 
-### 🔌 Registering Custom CLI Engines (e.g., Ollama or custom scripts)
-
-You can register *any* CLI command dynamically! If your command template has `{prompt}`, it will be formatted. Otherwise, the prompt is automatically piped to the command's standard input (`stdin`).
-
-**Ollama Example:**
-```bash
-./run_swarm.py \
-  --register-engine "local_llama=ollama run llama3" \
-  --developer-engines "gemini,local_llama" \
-  --task "Write a bubble sort in Python"
+### 3. MCP Server Mode (Cursor / Claude Desktop Integration)
+You can expose the swarm as an MCP Tool. Add this to your `claude_desktop_config.json` or Cursor settings:
+```json
+{
+  "mcpServers": {
+    "multicliswarm": {
+      "command": "multicliswarm-mcp"
+    }
+  }
+}
 ```
-
-**Custom API Wrapper / curl Example:**
-```bash
-./run_swarm.py \
-  --register-engine "my_api=curl -s -X POST http://localhost:11434/api/generate -d '{\"model\": \"llama3\", \"prompt\": \"{prompt}\", \"stream\": false}' | jq -r .response" \
-  --developer-engines "gemini,my_api" \
-  --task "Write a binary search in Go"
-```
+Now you can type `@MultiCliSwarm write me a rust API` in your IDE chat!
 
 ---
 
 ## 🔌 Integrating as an SDK
 
-Because **Multi-CLI Swarm** is structured as a standard Python package, other backend services (like FastAPI) can easily import and run it:
+Because **Multi-CLI Swarm** is structured as a standard Python package, other backend services can easily import and run it with Docker sandboxing enabled:
 
 ```python
 from multicliswarm import SwarmOrchestrator, register_custom_engine
 
-# 1. Dynamically register any custom/local CLI engine programmatically
-register_custom_engine("ollama_llama", "ollama run llama3")
-
-# 2. Setup callback to receive real-time streaming updates
+# Setup callback to receive real-time streaming updates
 def my_status_callback(level, message):
     print(f"[{level.upper()}] {message}")
 
-# 3. Initialize and run
+# Initialize and run with Docker isolation enabled
 orchestrator = SwarmOrchestrator(
     architect_engine="gemini",
-    developer_engines=["gemini", "ollama_llama"],
+    developer_engines=["gemini", "codex"],
+    use_docker=True,
     callback=my_status_callback
 )
 
@@ -146,6 +140,7 @@ result = orchestrator.run(
 
 if result["success"]:
     print(f"Generated File: {result['filename']}")
+    print(f"Total Cost: ${result['cost_usd']:.4f}")
 ```
 
 ---
@@ -153,8 +148,8 @@ if result["success"]:
 ## 🧠 Scientific Foundations
 
 1. **Condorcet's Jury Theorem (Wisdom of the Crowd):**
-   When multiple independent estimators (models) each have an accuracy greater than $0.5$, the probability that a majority vote yields the correct solution increases towards $1.0$ as the number of estimators increases. By generating drafts in parallel, we prevent the "first-thought bias" or "anchoring bias."
+   When multiple independent estimators (models) each have an accuracy greater than $0.5$, the probability that a majority vote yields the correct solution increases towards $1.0$ as the number of estimators increases.
 2. **Asymmetric Minimax Game (Peer Review):**
-   In software development, finding bugs is mathematically less computationally complex (for an LLM) than drafting a solution from scratch. We play a cooperative game where independent reviewer agents attempt to "break" the developers' drafts, establishing a stable Nash Equilibrium where the final code has no obvious bugs.
-3. **Self-Healing Loop (Local Execution Environment):**
-   A major flaw of LLMs is hallucinations. We anchor the models to reality by executing the generated test cases locally and returning real runtime exception tracebacks back to a debugger agent, achieving absolute structural soundness.
+   In software development, finding bugs is mathematically less computationally complex than drafting a solution from scratch. We establish a stable Nash Equilibrium where the final code has no obvious bugs.
+3. **Self-Healing Loop (Docker Execution):**
+   A major flaw of LLMs is hallucinations. We anchor the models to reality by executing the generated test cases safely in an isolated Alpine container and returning real runtime exception tracebacks back to a debugger agent.
