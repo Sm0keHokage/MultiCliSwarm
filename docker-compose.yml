@@ -4,11 +4,23 @@ services:
   swarm-ui:
     build: .
     ports:
-      - "8080:8080"
+      - "${UI_PORT:-8080}:8080"
+      - "${MCP_PORT:-8000}:8000"
+      - "${BRIDGE_PORT:-9999}:9999"
     volumes:
-      - .:/app
-      - ~/.multicliswarm.db:/root/.multicliswarm.db
+      - swarm-data:/data
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      - PYTHONUNBUFFERED=1
-    command: multicliswarm-ui
+      - DB_PATH=/data/multicliswarm.db
+      - STORAGE_DIR=/data
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  swarm-data:

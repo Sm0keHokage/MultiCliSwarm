@@ -1,108 +1,62 @@
 # Multi-CLI Swarm (TPROrchestrator)
 
-Multi-CLI Swarm is a professional, **universal (language-agnostic)** implementation of the **MARE (Multi-Agent Refinement & Evaluation)** algorithm. It orchestrates a cooperative team of localized AI CLI models (`gemini`, `codex`, and optionally `claude`) using the principles of **Theory of Decision Making (TTPR)**, **Game Theory (Minimax peer review)**, and **Condorcet's Jury Theorem (Wisdom of the Crowd)**.
+Multi-CLI Swarm is a production-grade, autonomous software engineering ecosystem powered by the **MARE (Multi-Agent Refinement & Evaluation)** algorithm.
 
 ---
 
-## 🚀 The Elite Suite (v1.2.0) - Ascension
+## 🚀 Production Release (v2.0.0)
 
-Version 1.2.0 is the definitive release, elevating Multi-CLI Swarm to an elite, enterprise-ready software engineering ecosystem:
+Version 2.0.0 moves the ecosystem beyond a prototype into a robust, scalable, and resilient engineering platform:
 
-* **🛡️ Security Shield (SAST):** Automatically run security audits (e.g., `bandit`, `npm audit`) on generated code. The Swarm identifies and fixes vulnerabilities (SQLi, XSS, insecure dependencies) before they ever reach production.
-* **🗺️ Architecture Visualizer:** Explore your project's soul. The Web UI now features an interactive D3.js dependency graph, showing how files and modules interact.
-* **💬 Live Collaboration Chat:** Don't just watch—intervene! Send real-time instructions to the Swarm during any phase to adjust architecture or change implementation details on-the-fly.
-* **📚 Self-Healing Documentation:** Automatically generate professional documentation portals (MkDocs, Swagger/OpenAPI) for every project.
-* **🏎️ Performance Benchmarking:** Automated profiling and benchmarking ensure your code isn't just correct, but highly optimized.
-* **🤝 Consensus Protocol:** Committee-based peer review for mission-critical code reliability.
-* **⚡ Semantic RAG & Caching:** Hyper-efficient indexing with ChromaDB and up to 40% cost reduction via semantic reasoning reuse.
-* **🌿 Session Branching:** Non-destructive experimentation with state snapshots and rollbacks.
-* **🐙 CI/CD & Git Autopilot:** Seamless integration into GitHub Actions with automated branching and PRs.
-* **👁️ Visual Vision QA:** Headless Playwright browser testing with multimodal UI critique.
+* **🏗️ Async State Machine:** The Orchestrator is now a non-blocking state machine. It persists the session state (`architecting`, `developing`, `verifying`) to SQLite after every phase, enabling seamless recovery from crashes or restarts.
+* **⚡ Concurrent Web API:** The Web Dashboard and API now handle long-running swarm tasks in background threads, keeping the UI responsive and allowing real-time status polling.
+* **🛡️ Enterprise Hardening:** Centralized environment-driven configuration via `pydantic-settings`, structured JSON logging for production observability, and a hardened Docker image with non-root execution.
+* **💉 Surgical Patching & Semantic RAG:** Precise code modifications using Search/Replace blocks and intelligent codebase indexing via ChromaDB.
+* **🤝 Consensus Protocol:** Mission-critical reliability through committee-based peer review.
+* **👁️ Visual QA & Performance Benchmarking:** Multimodal frontend testing and automated profiling for high-performance code.
 
 ---
 
-## 📐 Pipeline Lifecycle
+## 📐 Production Pipeline
 
-```
-          [User Task] + [Semantic RAG] + [Web Search Docs]
-                              │
-                    [ 💬 Live Chat Intervention ]
-                              │
-                ┌───────────────────────────┐
-                │     Step 1: Architect     │ (Designs plan, Thinking, Schema)
-                └─────────────┬─────────────┘
-                              │
-                        [ 👤 HITL Approval ]
-                              │
-                              ▼
-                ┌───────────────────────────┐
-                │  Step 2: Developers       │ (Driver/Navigator Pair Programming)
-                └─────────────┬─────────────┘
-                              │
-                              ▼
-                ┌───────────────────────────┐
-                │     Step 3: Reviewer      │ (🤝 Multi-Reviewer Consensus)
-                └─────────────┬─────────────┘
-                              │
-                              ▼
-                ┌───────────────────────────┐
-                │    Step 4: Synthesizer    │ (Blends best designs)
-                └─────────────┬─────────────┘
-                              │
-                  [ 🖋️ Monaco Diff-Editor Approval ]
-                              │
-                     [ ✨ Auto-Formatting ]
-                              │
-                              ▼
-                ┌───────────────────────────┐
-                │  Step 5: Test Execution   │ (DOCKER Sandbox)
-                └─────────────┬─────────────┘
-                              │
-                    ┌─────────┴─────────┐
-             Tests Failed         Tests Passed
-                    │                   │
-                    ▼                   ▼
-        ┌───────────────────────┐  [ 🏎️ Performance Benchmark ]
-        │   Step 6: Debugger    │           │
-        │  (Surgical Patching)  │  [ 🛡️ Security SAST Audit ]
-        └───────────┬───────────┘           │
-                    ▲              [ 📚 Self-Healing Docs ]
-                    └──(Retries)            │
-                                   [ 🐙 Git Autopilot ] (PR)
-```
+1. **Context & Search:** Real-time Web Search + Semantic RAG indexing.
+2. **State: Architecting:** CoT planning with schema validation.
+3. **HITL Approval:** Human confirmation of the multi-file architecture.
+4. **State: Developing:** Driver/Navigator pair programming or parallel drafting.
+5. **State: Reviewing:** Multi-reviewer consensus and synthesis.
+6. **State: Verifying:** Docker-sandboxed testing, Surgical Patching, and SAST Security Audit.
+7. **State: Completed:** Final Benchmarking, Documentation (MkDocs), and Cloud Deployment.
 
 ---
 
-## 💻 Elite Installation
+## 💻 Enterprise Installation
 
 ```bash
 git clone https://github.com/Sm0keHokage/MultiCliSwarm.git
 cd MultiCliSwarm
-pip install -e .[dev]
+pip install -e .
 ```
 
-### 🐳 The One-Command Cloud
+### 🐳 Production Deployment
+Launch the hardened production stack with persistent volumes and health checks:
 ```bash
-docker-compose up --build
+docker-compose up -d --build
 ```
 
 ---
 
-## ⚙️ Elite Usage
+## ⚙️ Configuration
+Multi-CLI Swarm is fully configurable via environment variables or a `.env` file:
+- `DB_PATH`: Path to the SQLite session database.
+- `STORAGE_DIR`: Base directory for indexes and cache.
+- `ENVIRONMENT`: `production` or `development`.
+- `LOG_LEVEL`: `INFO`, `DEBUG`, `WARNING`.
 
-### Launch the Dashboard
-```bash
-multicliswarm-ui
-```
-Open your browser to http://127.0.0.1:8080 to experience the **Live Collaboration Chat** and **Architecture Visualizer**.
+---
 
-### Production CLI
+## 🔌 Reliable Failover
+The system is built for 100% uptime. Configure multiple engines for any role:
 ```bash
-multicliswarm \
-  --task "Implement a zero-trust auth microservice." \
-  --language "go" \
-  --security-audit \
-  --performance-bench \
-  --auto-docs \
-  --telemetry
+multicliswarm --architect-engine "claude,gemini" --task "..."
 ```
+The swarm will automatically retry with exponential backoff and failover to the next engine if rate limits are hit.
