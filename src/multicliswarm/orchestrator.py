@@ -10,13 +10,14 @@ from concurrent.futures import ThreadPoolExecutor
 
 from pydantic import ValidationError
 from .engines import get_engine, BaseEngine, register_custom_engine
-from .schemas import ArchitectResponse, FileMap, CustomToolRequest, estimate_cost
+from .schemas import ArchitectResponse, FileMap, CustomToolRequest, estimate_cost, DebuggerResponse
 from .db import save_session, get_session
 from .rag import get_codebase_context
 from .telemetry import get_tracer
 from .web_search import search_web_docs
 from .visual_qa import take_screenshot_sync
 from .git_autopilot import create_branch_and_commit
+from .patching import apply_patch
 
 logger = logging.getLogger("multicliswarm.orchestrator")
 tracer = get_tracer()
@@ -120,11 +121,11 @@ class SwarmOrchestrator:
         ask_code_approval: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None
     ):
         if auto_route:
-            developer_engines = ["gemini", "mock"] if not developer_engines else developer_engines
-            architect_engine = "claude"
-            reviewer_engine = "claude"
-            synthesizer_engine = "claude"
-            debugger_engine = "claude"
+            developer_engines = ["gemini,mock"] if not developer_engines else developer_engines
+            architect_engine = "claude,gemini"
+            reviewer_engine = "claude,gemini"
+            synthesizer_engine = "claude,gemini"
+            debugger_engine = "claude,gemini"
 
         self.architect_engine_name = architect_engine
         self.architect_engine = get_engine(architect_engine, architect_model)
@@ -166,7 +167,7 @@ class SwarmOrchestrator:
     def _track_cost(self, engine_name: str, prompt: str, response: str):
         in_tokens = len(prompt) // 4
         out_tokens = len(response) // 4
-        cost = estimate_cost(engine_name, in_tokens, out_tokens)
+        cost = estimate_cost(engine_name.split(',')[0], in_tokens, out_tokens)
         self.total_cost += cost
 
     def format_code(self, language: str, output_dir: str):
@@ -180,7 +181,6 @@ class SwarmOrchestrator:
                 self._log(f"Formatter {cmd} failed: {e}", "warning")
 
     def _handle_self_evolving_tools(self, tools: List[CustomToolRequest]):
-        """Dynamically writes tool scripts and registers them as engines."""
         if not tools: return
         self._log(f"Self-Evolving Tools: Architect requested {len(tools)} custom tools.", "step")
         os.makedirs(".multicliswarm_tools", exist_ok=True)
@@ -189,7 +189,6 @@ class SwarmOrchestrator:
             with open(script_path, "w") as f:
                 f.write(t.python_script)
             os.chmod(script_path, 0o755)
-            # Register it
             register_custom_engine(t.tool_name, f"python3 {script_path}")
             self.developer_engines_names.append(t.tool_name)
             self._log(f"Registered evolved tool '{t.tool_name}' dynamically.", "success")
@@ -252,8 +251,18 @@ class SwarmOrchestrator:
                 {web_context}
                 {previous_context}
                 
-                You MUST output a valid JSON object matching this exact Pydantic schema:
+                You MUST use the `<thinking>` tag to reason about the architecture before generating the JSON.
+                After thinking, output a valid JSON object matching this exact Pydantic schema:
                 {json.dumps(schema_json, indent=2)}
+                
+                Example format:
+                <thinking>
+                Analyzing requirements...
+                We need files X, Y, and Z.
+                </thinking>
+                ```json
+                {{ "specification": "...", "files": [...] }}
+                ```
                 """
                 
                 arch_output_raw = self.architect_engine.execute(architect_prompt)
@@ -271,7 +280,6 @@ class SwarmOrchestrator:
                 
                 self._log(f"Architect mapped {len(files_map)} files to create.", "success")
                 
-                # Self-Evolving Tools Injection
                 if arch_response.custom_tools:
                     self._handle_self_evolving_tools(arch_response.custom_tools)
             
@@ -291,7 +299,6 @@ class SwarmOrchestrator:
                     self._log(f"Generating file: {fname} (Test: {fmap.is_test})", "step")
                     
                     if self.pair_programming and len(self.developer_engines_names) >= 2:
-                        # Pair Programming Mode (Iterative Ping-Pong)
                         self._log("Pair Programming Mode Active (Driver -> Navigator).", "info")
                         engine_1 = self.developer_engines_names[0]
                         engine_2 = self.developer_engines_names[1]
@@ -308,7 +315,6 @@ class SwarmOrchestrator:
                         
                         successful_drafts = [{"index": 0, "engine": "Pair_Programming", "code": code_nav}]
                     else:
-                        # Parallel Independent Mode
                         def run_developer(index: int, engine_name: str) -> Dict[str, Any]:
                             with tracer.start_as_current_span(f"Developer_{engine_name}"):
                                 dev_prompt = f"System Specification:\n{spec}\nWrite ONLY the complete {language} code for: '{fname}'.\nDescription: {fmap.description}\nOutput ONLY raw code."
@@ -380,6 +386,7 @@ class SwarmOrchestrator:
                             except Exception as e:
                                 self._log(f"Visual QA analysis failed: {e}", "warning")
 
+            # --- 5. VERIFICATION & DEBUGGING (WITH SURGICAL PATCHING) ---
             with tracer.start_as_current_span("Phase_5_Verification"):
                 self._log("Phase 5: Global Verification & Auto-Debugging", "step")
                 raw_test_cmd = test_cmd or DEFAULT_TEST_CMDS.get(lang_norm, "echo 'No tests run'")
@@ -403,12 +410,13 @@ class SwarmOrchestrator:
                             if cycle == self.max_debug_cycles:
                                 break
                                 
-                            self._log("Invoking Debugger on failing files...")
+                            self._log("Invoking Debugger to create Surgical Patches...")
                             current_state = "".join([f"### File: {fn}\n```{lang_norm}\n{fc}\n```\n" for fn, fc in final_files_content.items()])
                             
+                            debug_schema_json = DebuggerResponse.model_json_schema()
+                            
                             debug_prompt = f"""
-                            You are an expert Debugger. 
-                            The project failed its test suite or Visual QA checks.
+                            You are an expert Debugger. The project failed its test suite or Visual QA checks.
                             
                             Current Project Files:
                             {current_state}
@@ -418,24 +426,38 @@ class SwarmOrchestrator:
                             
                             {visual_issues}
                             
-                            Analyze the error and provide the COMPLETE fixed code for the ONE OR MORE files that caused the failure.
-                            Output valid JSON mapping filename -> fixed code. Example: {{"src/main.py": "new code..."}}
+                            Analyze the error and provide SURGICAL PATCHES to fix the failing files.
+                            Use `<thinking>` tags to explain the bug and your solution.
+                            Then output a JSON object matching this schema exactly:
+                            {json.dumps(debug_schema_json, indent=2)}
+                            
+                            Your `search` string must exactly match the text to be replaced (including indentation). Provide enough lines in `search` to make it unique.
                             """
                             try:
                                 fixed_dict_raw = self.debugger_engine.execute(debug_prompt)
                                 self._track_cost(self.debugger_engine_name, debug_prompt, fixed_dict_raw)
                                 fixed_dict = extract_json_from_text(fixed_dict_raw)
                                 
-                                for fn, new_code in fixed_dict.items():
-                                    if fn in final_files_content:
-                                        final_files_content[fn] = clean_code(new_code, language)
-                                        fpath = os.path.join(output_dir, fn)
-                                        with open(fpath, "w") as f:
-                                            f.write(final_files_content[fn])
-                                        self._log(f"Debugger patched {fn}.", "success")
-                                        
+                                debug_resp = DebuggerResponse(**fixed_dict)
+                                
+                                for p in debug_resp.patches:
+                                    if p.filepath in final_files_content:
+                                        old_content = final_files_content[p.filepath]
+                                        try:
+                                            new_content = apply_patch(old_content, p.blocks)
+                                            final_files_content[p.filepath] = new_content
+                                            fpath = os.path.join(output_dir, p.filepath)
+                                            with open(fpath, "w") as f:
+                                                f.write(new_content)
+                                            self._log(f"Debugger surgically patched {p.filepath}.", "success")
+                                        except ValueError as ve:
+                                            self._log(f"Failed to apply patch to {p.filepath}: {ve}", "error")
+                                            
                                 self.format_code(language, output_dir)
                                 visual_issues = ""
+                            except ValidationError as e:
+                                self._log(f"Debugger JSON validation failed: {e}", "error")
+                                break
                             except Exception as e:
                                 self._log(f"Debugger execution failed: {e}", "error")
                                 break

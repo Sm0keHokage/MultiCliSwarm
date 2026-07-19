@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "multicliswarm"
-version = "0.6.0"
-description = "A Next-Gen Autonomous AI Ecosystem with Pair Programming, Self-Evolving Tools, and CI/CD Autopilot."
+version = "0.7.0"
+description = "A Next-Gen Autonomous AI Ecosystem with Surgical Patching, Auto-Failover, and SOTA Prompt Determinism."
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
@@ -28,7 +28,13 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.20.0",
     "duckduckgo-search>=6.0.0",
     "playwright>=1.40.0",
-    "PyGithub>=2.1.0"
+    "PyGithub>=2.1.0",
+    "tenacity>=8.2.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0"
 ]
 
 [project.scripts]

@@ -16,6 +16,17 @@ class ArchitectResponse(BaseModel):
     files: List[FileMap] = Field(description="A list of all files that need to be generated for this task, including implementation and test files.")
     custom_tools: Optional[List[CustomToolRequest]] = Field(default=[], description="If the task requires processing or actions beyond standard coding, define custom Python CLI scripts here. The orchestrator will dynamically compile and register them as engines.")
 
+class ReplaceBlock(BaseModel):
+    search: str = Field(description="The exact literal string to search for in the file. Must match indentation and newlines exactly.")
+    replace: str = Field(description="The new literal string to replace the searched block with.")
+
+class FilePatch(BaseModel):
+    filepath: str = Field(description="The relative path to the file to be patched.")
+    blocks: List[ReplaceBlock] = Field(description="List of search/replace blocks to apply to this file.")
+
+class DebuggerResponse(BaseModel):
+    patches: List[FilePatch] = Field(description="A list of patches to apply to fix the test failures.")
+
 class Pricing(BaseModel):
     input_price_per_1m: float
     output_price_per_1m: float

@@ -36,7 +36,7 @@ def save_session(session_id: str, task: str, language: str, specification: str, 
         task, 
         language, 
         specification, 
-        json.dumps([fm.dict() for fm in files_map]), 
+        json.dumps([fm.model_dump() for fm in files_map]), 
         json.dumps(final_files), 
         cost
     ))
