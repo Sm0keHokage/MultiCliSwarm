@@ -4,6 +4,7 @@ import logging
 from .orchestrator import SwarmOrchestrator
 from .engines import register_custom_engine
 from .schemas import ArchitectResponse
+from .telemetry import init_telemetry
 
 # ANSI colors for pretty terminal prints
 class Colors:
@@ -35,20 +36,20 @@ def ask_approval_cli(task: str, arch_response: ArchitectResponse) -> bool:
     return choice == 'y' or choice == 'yes'
 
 def main():
-    parser = argparse.ArgumentParser(description="Multi-CLI Swarm (Universal MARE Algorithm v0.3.0)")
+    parser = argparse.ArgumentParser(description="Multi-CLI Swarm (SOTA MARE Algorithm v0.4.0)")
     
     parser.add_argument("--task", "-t", type=str, required=True, help="Description of the coding task.")
     parser.add_argument("--language", "-l", type=str, default="python", help="Target programming language (e.g. python, javascript, go, rust).")
     parser.add_argument("--resume", type=str, help="Resume and iterate on a previous session ID.")
+    parser.add_argument("--context-dir", type=str, help="Path to existing codebase for RAG context extraction.")
     
     # Engines
     parser.add_argument("--architect-engine", type=str, default="gemini", help="CLI engine for Architect role.")
-    parser.add_argument("--developer-engines", type=str, default="gemini,codex", help="Comma-separated CLI engines for parallel Developer roles (e.g. gemini,codex).")
+    parser.add_argument("--developer-engines", type=str, default="gemini,codex", help="Comma-separated CLI engines for parallel Developer roles.")
     parser.add_argument("--reviewer-engine", type=str, default="gemini", help="CLI engine for Reviewer role.")
     parser.add_argument("--synthesizer-engine", type=str, default="gemini", help="CLI engine for Synthesizer role.")
     parser.add_argument("--debugger-engine", type=str, default="gemini", help="CLI engine for Debugger role.")
     
-    # Custom Engines Registration
     parser.add_argument(
         "--register-engine", "-r",
         type=str,
@@ -61,13 +62,18 @@ def main():
     parser.add_argument("--test-cmd", type=str, help="Custom command to run unit tests.")
     parser.add_argument("--max-debug-cycles", type=int, default=3, help="Maximum number of test-debug-fix cycles.")
     parser.add_argument("--use-docker", action="store_true", help="Run tests safely in isolated Docker containers.")
+    parser.add_argument("--auto-route", action="store_true", help="Enable dynamic routing (cheap models for dev, expensive for review).")
     parser.add_argument("--auto-approve", action="store_true", help="Skip Human-in-the-Loop approval gate.")
+    parser.add_argument("--telemetry", action="store_true", help="Enable OpenTelemetry tracing to console.")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose library logging.")
     
     args = parser.parse_args()
     
     if args.verbose:
         setup_logging()
+        
+    if args.telemetry:
+        init_telemetry(enable_console=True)
         
     for reg_str in args.register_engine:
         if "=" not in reg_str:
@@ -99,6 +105,7 @@ def main():
             debugger_engine=args.debugger_engine,
             max_debug_cycles=args.max_debug_cycles,
             use_docker=args.use_docker,
+            auto_route=args.auto_route,
             callback=cli_callback,
             ask_approval=None if args.auto_approve else ask_approval_cli
         )
@@ -107,7 +114,8 @@ def main():
             task=args.task,
             language=args.language,
             test_cmd=args.test_cmd,
-            resume_session_id=args.resume
+            resume_session_id=args.resume,
+            context_dir=args.context_dir
         )
         
         if result.get("status") == "cancelled":
