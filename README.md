@@ -6,27 +6,29 @@ This framework is built as a **modular Python package (SDK)**, allowing seamless
 
 ---
 
-## 🚀 State-of-the-Art Enterprise Features (v0.4.0)
+## 🚀 Autonomous Ecosystem Features (v0.5.0)
 
-With the release of v0.4.0, Multi-CLI Swarm rivals commercial AI software engineers (like Devin or Cosine) by bringing advanced autonomy and transparency to your local workspace:
+With the release of v0.5.0, Multi-CLI Swarm steps into the future, becoming a fully autonomous "Senior Developer in a Box":
 
-* **🧠 Smart Codebase RAG:** Pass `--context-dir` to let the Architect automatically scan your existing project (respecting `.gitignore`), read key files, and seamlessly integrate new features into your massive legacy codebases.
-* **🔀 Dynamic Smart Routing:** Use `--auto-route` to automatically assign cheap, fast models (like `gemini-flash` or local `Llama 3`) to draft code, while reserving expensive reasoning models (like `claude-3.5-sonnet`) for architecture, peer-review, and debugging. Save up to 70% on token costs!
-* **🖋️ Interactive Web Diff-Editor:** In the Web UI, before code is saved and tested, an interactive Monaco Editor pops up. Visually compare the AI's drafts, tweak the code by hand, and hit "Approve & Continue"!
-* **📊 OpenTelemetry Tracing (Phoenix / Jaeger):** Pass `--telemetry` to trace every agent's thought process, duration, and token usage using the industry standard OTLP protocol. Perfect for debugging the Swarm's logic.
-* **👤 Human-in-the-Loop (HITL):** Approvals gate after the Architecture phase to prevent costly hallucinations before code generation begins.
-* **📂 Multi-file Architecture:** Generates entire microservices or component structures at once using dynamically mapped file trees.
-* **✨ Auto-Formatting & Linting:** Automatically runs native formatters (`black`, `prettier`, `gofmt`, `cargo fmt`) to ensure code matches industry standards.
-* **💾 Session Persistence (SQLite):** Remembers previous architecture specs and generated code so you can `--resume` and iteratively improve your project!
-* **🔌 IDE Integration (MCP Server):** Directly integrate the Swarm into Cursor, Claude Desktop, and Windsurf via the Model Context Protocol.
-* **🛡️ Secure Docker Sandboxing:** Execute unit tests and debug loops safely within isolated Docker containers to protect your local environment.
+* **👁️ Visual QA (Headless Vision):** Use `--visual-qa`. For HTML/frontend tasks, the Swarm automatically boots a headless Playwright browser, takes a screenshot of the rendered page, and sends it to a Vision model to critique UI bugs, overlaps, or styling issues!
+* **📦 Autonomous Package Management:** Use `--auto-packages`. The Swarm detects required dependencies (like `package.json` or `requirements.txt`) and seamlessly installs them inside the Docker sandbox before running tests.
+* **🌐 Web Search RAG:** Use `--web-search`. If the Architect needs the latest API documentation, it searches DuckDuckGo in real-time, parses the top websites, and injects 2026-accurate docs into the generation prompt.
+* **🐙 Git Autopilot:** Use `--git-autopilot`. Once the task is fully tested and formatted, the Swarm automatically creates a new git branch, stages the files, and writes a beautiful Semantic Commit message.
+* **🧠 Smart Codebase RAG:** Pass `--context-dir` to automatically scan your existing project (respecting `.gitignore`), read key files, and seamlessly integrate new features into legacy codebases.
+* **🔀 Dynamic Smart Routing:** Use `--auto-route` to dynamically assign cheap, fast models (like `gemini-flash`) to draft code, reserving expensive models (like `claude-3.5-sonnet`) for architecture and debugging. Save up to 70% on token costs!
+* **🖋️ Interactive Web Diff-Editor:** Visually compare the AI's drafts, tweak the code by hand, and hit "Approve" via our FastAPI + WebSockets dashboard.
+* **📊 OpenTelemetry Tracing:** Pass `--telemetry` to trace every agent's thought process using OTLP.
+* **👤 Human-in-the-Loop (HITL):** Approvals gate after the Architecture phase.
+* **✨ Auto-Formatting & Linting:** Automatically runs native formatters (`black`, `prettier`, `gofmt`).
+* **💾 Session Persistence (SQLite):** Remembers specs and code so you can `--resume`.
+* **🛡️ Secure Docker Sandboxing:** Execute unit tests safely within isolated Alpine containers.
 
 ---
 
 ## 📐 Architecture / Swarm Pipeline
 
 ```
-                     [User Task / Prompt] + [RAG Context]
+          [User Task / Prompt] + [RAG Context] + [Web Search Docs]
                               │
                               ▼
                 ┌───────────────────────────┐
@@ -57,17 +59,20 @@ With the release of v0.4.0, Multi-CLI Swarm rivals commercial AI software engine
                               │
                               ▼
                 ┌───────────────────────────┐
-                │  Step 5: Test Execution   │ (Runs native test command in DOCKER container)
+                │  Step 5: Test Execution   │ (Auto-Installs Packages & Runs tests in DOCKER)
                 └─────────────┬─────────────┘
+                              │
+                       [ 👁️ Visual QA ] (Playwright screenshots -> Vision Model)
                               │
                     ┌─────────┴─────────┐
              Tests Failed         Tests Passed
                     │                   │
                     ▼                   ▼
-        ┌───────────────────────┐  [Completed Project]
-        │   Step 6: Debugger    │ (Traced to OpenTelemetry)
-        └───────────┬───────────┘
-                    ▲ (Fixes code and retries)
+        ┌───────────────────────┐  [ 🐙 Git Autopilot ] (Auto Branch & Commit)
+        │   Step 6: Debugger    │           │
+        └───────────┬───────────┘           ▼
+                    ▲              [Completed Project] (Saved to SQLite DB)
+                    └──(Fixes code and retries)
 ```
 
 ---
@@ -85,21 +90,27 @@ Ensure you have Python 3.8+ and at least one or more of the following CLI tools 
 git clone https://github.com/Sm0keHokage/MultiCliSwarm.git
 cd MultiCliSwarm
 pip install -e .
+
+# Optional: Install Playwright browsers for Visual QA
+playwright install chromium
 ```
 
 ---
 
 ## ⚙️ Usage Modes
 
-### 1. Terminal CLI Mode
-Execute the swarm using the installed package command `multicliswarm`.
+### 1. Terminal CLI Mode (The Ultimate Command)
+Execute the swarm with all SOTA features enabled:
 ```bash
 multicliswarm \
-  --task "Write a python class to calculate the nth Fibonacci number." \
-  --language "python" \
+  --task "Write a responsive HTML/JS landing page for a coffee shop." \
+  --language "html" \
   --auto-route \
-  --telemetry \
-  --context-dir "./src"
+  --visual-qa \
+  --web-search \
+  --git-autopilot \
+  --use-docker \
+  --auto-packages
 ```
 
 ### 1.1 Resuming a Session (Iterative Development)

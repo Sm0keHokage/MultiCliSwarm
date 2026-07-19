@@ -36,7 +36,7 @@ def ask_approval_cli(task: str, arch_response: ArchitectResponse) -> bool:
     return choice == 'y' or choice == 'yes'
 
 def main():
-    parser = argparse.ArgumentParser(description="Multi-CLI Swarm (SOTA MARE Algorithm v0.4.0)")
+    parser = argparse.ArgumentParser(description="Multi-CLI Swarm (Autonomous AI Ecosystem v0.5.0)")
     
     parser.add_argument("--task", "-t", type=str, required=True, help="Description of the coding task.")
     parser.add_argument("--language", "-l", type=str, default="python", help="Target programming language (e.g. python, javascript, go, rust).")
@@ -58,11 +58,15 @@ def main():
         help="Register a custom CLI engine. Format: 'name=command_template'."
     )
     
-    # Options
+    # Future of AI Options
     parser.add_argument("--test-cmd", type=str, help="Custom command to run unit tests.")
     parser.add_argument("--max-debug-cycles", type=int, default=3, help="Maximum number of test-debug-fix cycles.")
     parser.add_argument("--use-docker", action="store_true", help="Run tests safely in isolated Docker containers.")
+    parser.add_argument("--auto-packages", action="store_true", help="Autonomous Package Management (auto-installs requirements in docker).")
     parser.add_argument("--auto-route", action="store_true", help="Enable dynamic routing (cheap models for dev, expensive for review).")
+    parser.add_argument("--web-search", action="store_true", help="Enable real-time DuckDuckGo search for API docs.")
+    parser.add_argument("--visual-qa", action="store_true", help="Enable Visual QA via Playwright and Vision models.")
+    parser.add_argument("--git-autopilot", action="store_true", help="Enable Git Autopilot (auto branch, stage, commit).")
     parser.add_argument("--auto-approve", action="store_true", help="Skip Human-in-the-Loop approval gate.")
     parser.add_argument("--telemetry", action="store_true", help="Enable OpenTelemetry tracing to console.")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose library logging.")
@@ -106,6 +110,10 @@ def main():
             max_debug_cycles=args.max_debug_cycles,
             use_docker=args.use_docker,
             auto_route=args.auto_route,
+            web_search=args.web_search,
+            visual_qa=args.visual_qa,
+            auto_packages=args.auto_packages,
+            git_autopilot=args.git_autopilot,
             callback=cli_callback,
             ask_approval=None if args.auto_approve else ask_approval_cli
         )

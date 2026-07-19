@@ -3,23 +3,21 @@ import json
 import subprocess
 import tempfile
 import logging
+from typing import List, Optional
 
 logger = logging.getLogger("multicliswarm.engines")
 
-# Global registry for custom CLI engines
 CUSTOM_ENGINES = {}
 
 class BaseEngine:
-    """Base interface for all CLI wrapper engines."""
     def __init__(self, model=None):
         self.model = model
 
-    def execute(self, prompt: str) -> str:
+    def execute(self, prompt: str, images: Optional[List[str]] = None) -> str:
         raise NotImplementedError("Subclasses must implement execute()")
 
 class GeminiEngine(BaseEngine):
-    """Engine wrapper for gemini-cli."""
-    def execute(self, prompt: str) -> str:
+    def execute(self, prompt: str, images: Optional[List[str]] = None) -> str:
         cmd = ["gemini", "-p", prompt, "-o", "json"]
         if self.model:
             cmd += ["-m", self.model]
@@ -32,19 +30,20 @@ class GeminiEngine(BaseEngine):
             logger.error(f"gemini CLI invocation failed: {e.stderr or e.stdout}")
             raise RuntimeError(f"gemini CLI failed: {e.stderr or e.stdout}")
         except json.JSONDecodeError:
-            logger.warning("Failed to parse gemini-cli JSON output, falling back to raw stdout.")
             return result.stdout.strip()
 
 class CodexEngine(BaseEngine):
-    """Engine wrapper for codex-cli."""
-    def execute(self, prompt: str) -> str:
+    def execute(self, prompt: str, images: Optional[List[str]] = None) -> str:
         with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_out:
             temp_file_path = temp_out.name
             
         cmd = ["codex", "exec", prompt, "--skip-git-repo-check", "--ephemeral", "-o", temp_file_path]
         if self.model:
             cmd += ["-m", self.model]
-            
+        if images:
+            for img in images:
+                cmd += ["-i", img]
+                
         try:
             subprocess.run(cmd, capture_output=True, text=True, check=True)
             with open(temp_file_path, "r") as f:
@@ -58,12 +57,10 @@ class CodexEngine(BaseEngine):
                 os.remove(temp_file_path)
 
 class ClaudeEngine(BaseEngine):
-    """Engine wrapper for claude CLI (Claude Code)."""
-    def execute(self, prompt: str) -> str:
+    def execute(self, prompt: str, images: Optional[List[str]] = None) -> str:
         cmd = ["claude", "-p", prompt]
         if self.model:
             cmd += ["--model", self.model]
-            
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             return result.stdout.strip()
@@ -72,14 +69,11 @@ class ClaudeEngine(BaseEngine):
             raise RuntimeError(f"claude CLI failed: {e.stderr or e.stdout}")
 
 class GenericCLIEngine(BaseEngine):
-    """Executes an arbitrary user-defined CLI command template."""
     def __init__(self, cmd_template: str):
         super().__init__()
         self.cmd_template = cmd_template
 
-    def execute(self, prompt: str) -> str:
-        # If the template contains "{prompt}", substitute it.
-        # Otherwise, feed the prompt to the command's stdin (highly robust for Ollama, etc.)
+    def execute(self, prompt: str, images: Optional[List[str]] = None) -> str:
         if "{prompt}" in self.cmd_template:
             cmd = self.cmd_template.replace("{prompt}", prompt)
             stdin_data = None
@@ -95,7 +89,6 @@ class GenericCLIEngine(BaseEngine):
             raise RuntimeError(f"Custom CLI engine failed: {e.stderr or e.stdout}")
 
 def register_custom_engine(name: str, cmd_template: str):
-    """Registers a custom engine globally by name."""
     name_clean = name.lower().strip()
     CUSTOM_ENGINES[name_clean] = GenericCLIEngine(cmd_template)
     logger.info(f"Registered custom CLI engine: '{name_clean}' with command: '{cmd_template}'")

@@ -11,4 +11,4 @@ __all__ = [
     "register_custom_engine"
 ]
 
-__version__ = "0.1.1"
+__version__ = "0.5.0"

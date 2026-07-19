@@ -14,6 +14,9 @@ from .schemas import ArchitectResponse, FileMap, estimate_cost
 from .db import save_session, get_session
 from .rag import get_codebase_context
 from .telemetry import get_tracer
+from .web_search import search_web_docs
+from .visual_qa import take_screenshot_sync
+from .git_autopilot import create_branch_and_commit
 
 logger = logging.getLogger("multicliswarm.orchestrator")
 tracer = get_tracer()
@@ -60,7 +63,7 @@ def clean_code(code: str, language: str = "python") -> str:
         return match.group(1).strip()
     return code.strip()
 
-def run_in_docker(language: str, test_cmd: str, output_dir: str) -> subprocess.CompletedProcess:
+def run_in_docker(language: str, test_cmd: str, output_dir: str, auto_packages: bool = False) -> subprocess.CompletedProcess:
     lang_clean = language.lower().strip()
     image = DOCKER_IMAGES.get(lang_clean)
     
@@ -69,9 +72,19 @@ def run_in_docker(language: str, test_cmd: str, output_dir: str) -> subprocess.C
         return subprocess.run(test_cmd, shell=True, capture_output=True, text=True, cwd=output_dir)
         
     abs_dir = os.path.abspath(output_dir)
+    
+    # Autonomous Package Management wrapper inside docker
+    if auto_packages:
+        if lang_clean == "python":
+            test_cmd = f"pip install pytest requests; [ -f requirements.txt ] && pip install -r requirements.txt; {test_cmd}"
+        elif lang_clean == "javascript" or lang_clean == "typescript":
+            test_cmd = f"npm init -y; npm install; {test_cmd}"
+        elif lang_clean == "go":
+            test_cmd = f"go mod tidy; {test_cmd}"
+            
     docker_cmd = [
         "docker", "run", "--rm",
-        "--network", "none",
+        "--network", "host" if auto_packages else "none", # Need net to download packages
         "--memory", "512m",
         "--cpus", "1.0",
         "-v", f"{abs_dir}:/workspace:rw",
@@ -98,11 +111,14 @@ class SwarmOrchestrator:
         max_debug_cycles: int = 3,
         use_docker: bool = False,
         auto_route: bool = False,
+        web_search: bool = False,
+        visual_qa: bool = False,
+        auto_packages: bool = False,
+        git_autopilot: bool = False,
         callback: Optional[Callable[[str, str], None]] = None,
         ask_approval: Optional[Callable[[str, ArchitectResponse], bool]] = None,
         ask_code_approval: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None
     ):
-        # Auto-routing logic (cheaper for dev, expensive for arch/review/debug)
         if auto_route:
             developer_engines = ["gemini", "mock"] if not developer_engines else developer_engines
             architect_engine = "claude"
@@ -119,8 +135,14 @@ class SwarmOrchestrator:
         self.synthesizer_engine = get_engine(synthesizer_engine, synthesizer_model)
         self.debugger_engine_name = debugger_engine
         self.debugger_engine = get_engine(debugger_engine, debugger_model)
+        
         self.max_debug_cycles = max_debug_cycles
         self.use_docker = use_docker
+        self.web_search = web_search
+        self.visual_qa = visual_qa
+        self.auto_packages = auto_packages
+        self.git_autopilot = git_autopilot
+        
         self.callback = callback
         self.ask_approval = ask_approval
         self.ask_code_approval = ask_code_approval
@@ -171,7 +193,6 @@ class SwarmOrchestrator:
             
             lang_norm = language.lower().strip()
             self.total_cost = 0.0
-            
             session_id = resume_session_id or str(uuid.uuid4())
             previous_context = ""
             
@@ -183,7 +204,7 @@ class SwarmOrchestrator:
                     for fname, content in old_session['final_files'].items():
                         previous_context += f"\nPrevious Code for {fname}:\n```{lang_norm}\n{content}\n```\n"
 
-            # RAG Integration
+            # 1. RAG Context
             rag_context = ""
             if context_dir:
                 self._log(f"Scanning codebase context in {context_dir}...", "info")
@@ -191,6 +212,15 @@ class SwarmOrchestrator:
                     rag_context = get_codebase_context(context_dir)
                     if rag_context:
                         rag_context = f"\n=== EXISTING CODEBASE CONTEXT ===\n{rag_context}\n=================================\n"
+
+            # 2. Web Search / API Docs RAG
+            web_context = ""
+            if self.web_search:
+                self._log("Fetching real-time documentation from Web...", "info")
+                with tracer.start_as_current_span("Web_Search"):
+                    web_context = search_web_docs(task)
+                    if web_context:
+                        web_context = f"\n{web_context}\n"
 
             self._log(f"Starting Multi-CLI Swarm (Session: {session_id})", "info")
             
@@ -205,6 +235,7 @@ class SwarmOrchestrator:
                 "{task}"
                 
                 {rag_context}
+                {web_context}
                 {previous_context}
                 
                 You MUST output a valid JSON object matching this exact Pydantic schema:
@@ -231,7 +262,7 @@ class SwarmOrchestrator:
                 with tracer.start_as_current_span("HITL_Architecture_Approval"):
                     approved = self.ask_approval(task, arch_response)
                     if not approved:
-                        self._log("Task cancelled by user during Architect approval gate.", "warning")
+                        self._log("Task cancelled by user.", "warning")
                         return {"success": False, "status": "cancelled"}
 
             final_files_content = {}
@@ -242,7 +273,6 @@ class SwarmOrchestrator:
                 with tracer.start_as_current_span(f"Generate_{fname}"):
                     self._log(f"Generating file: {fname} (Test: {fmap.is_test})", "step")
                     
-                    # --- 2. PARALLEL DEVELOPERS ---
                     def run_developer(index: int, engine_name: str) -> Dict[str, Any]:
                         with tracer.start_as_current_span(f"Developer_{engine_name}"):
                             dev_prompt = f"""
@@ -308,6 +338,25 @@ class SwarmOrchestrator:
             # --- AUTO-FORMATTING ---
             with tracer.start_as_current_span("Auto_Formatting"):
                 self.format_code(language, output_dir)
+                
+            # --- Visual QA Check ---
+            visual_issues = ""
+            if self.visual_qa:
+                with tracer.start_as_current_span("Visual_QA"):
+                    html_files = [fn for fn in final_files_content.keys() if fn.endswith(".html")]
+                    for hf in html_files:
+                        self._log(f"Running Visual QA for {hf}...", "info")
+                        img_path = os.path.join(output_dir, f"{hf}.png")
+                        if take_screenshot_sync(os.path.join(output_dir, hf), img_path):
+                            vqa_prompt = "You are a Visual QA tester. Look at this screenshot of the rendered HTML page. List any obvious visual bugs, overlapping text, missing images, or layout breakages. If none, say 'Looks good'."
+                            try:
+                                vqa_feedback = self.reviewer_engine.execute(vqa_prompt, images=[img_path])
+                                self._track_cost(self.reviewer_engine_name, vqa_prompt, vqa_feedback)
+                                if "Looks good" not in vqa_feedback:
+                                    visual_issues += f"Visual Issues in {hf}:\n{vqa_feedback}\n"
+                                    self._log(f"Visual QA found issues in {hf}", "warning")
+                            except Exception as e:
+                                self._log(f"Visual QA analysis failed: {e}", "warning")
 
             # --- 5. VERIFICATION & DEBUGGING ---
             with tracer.start_as_current_span("Phase_5_Verification"):
@@ -320,11 +369,11 @@ class SwarmOrchestrator:
                         self._log(f"Validation Cycle {cycle} of {self.max_debug_cycles}...")
                         
                         if self.use_docker:
-                            test_result = run_in_docker(language, raw_test_cmd, output_dir)
+                            test_result = run_in_docker(language, raw_test_cmd, output_dir, self.auto_packages)
                         else:
                             test_result = subprocess.run(raw_test_cmd, shell=True, capture_output=True, text=True, cwd=output_dir)
                         
-                        if test_result.returncode == 0:
+                        if test_result.returncode == 0 and not visual_issues:
                             self._log(f"All tests PASSED successfully in cycle {cycle}!", "success")
                             tests_passed = True
                             break
@@ -338,13 +387,15 @@ class SwarmOrchestrator:
                             
                             debug_prompt = f"""
                             You are an expert Debugger. 
-                            The project failed its test suite.
+                            The project failed its test suite or Visual QA checks.
                             
                             Current Project Files:
                             {current_state}
                             
                             Test Failure Traceback:
                             {test_result.stderr or test_result.stdout}
+                            
+                            {visual_issues}
                             
                             Analyze the error and provide the COMPLETE fixed code for the ONE OR MORE files that caused the failure.
                             Output valid JSON mapping filename -> fixed code. Example: {{"src/main.py": "new code..."}}
@@ -363,9 +414,18 @@ class SwarmOrchestrator:
                                         self._log(f"Debugger patched {fn}.", "success")
                                         
                                 self.format_code(language, output_dir)
+                                visual_issues = "" # Reset visual issues for next iteration
                             except Exception as e:
                                 self._log(f"Debugger execution failed: {e}", "error")
                                 break
+
+            # --- Git Autopilot ---
+            if self.git_autopilot:
+                with tracer.start_as_current_span("Git_Autopilot"):
+                    branch_name = f"swarm-feat-{session_id[:8]}"
+                    msg = f"feat: Autonomous generation for task '{task[:40]}...'"
+                    if create_branch_and_commit(output_dir, branch_name, msg):
+                        self._log(f"Git Autopilot successfully committed to branch {branch_name}", "success")
 
             self._log(f"Total Swarm Cost Estimate: ${self.total_cost:.5f} USD", "info")
             span.set_attribute("cost_usd", self.total_cost)

@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "multicliswarm"
-version = "0.4.0"
-description = "A State-of-the-Art Multi-CLI cooperative agent swarm using Theory of Decision Making, Game Theory, and RAG."
+version = "0.5.0"
+description = "A State-of-the-Art Multi-CLI cooperative agent swarm with Visual QA, Git Autopilot, Web Search, and RAG."
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
@@ -25,7 +25,9 @@ dependencies = [
     "pathspec>=0.11.0",
     "opentelemetry-api>=1.20.0",
     "opentelemetry-sdk>=1.20.0",
-    "opentelemetry-exporter-otlp>=1.20.0"
+    "opentelemetry-exporter-otlp>=1.20.0",
+    "duckduckgo-search>=6.0.0",
+    "playwright>=1.40.0"
 ]
 
 [project.scripts]
