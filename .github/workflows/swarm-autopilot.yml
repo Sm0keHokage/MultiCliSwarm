@@ -1,0 +1,29 @@
+name: MultiCliSwarm CI/CD Autopilot
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  swarm-autofix:
+    if: contains(github.event.issue.labels.*.name, 'swarm-autofix')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install MultiCliSwarm
+        run: pip install -e .
+
+      - name: Run Swarm Autopilot
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          multicliswarm-ci --issue ${{ github.event.issue.number }} --repo ${{ github.repository }} --token ${{ secrets.GITHUB_TOKEN }}

@@ -3,13 +3,18 @@ from typing import List, Dict, Optional
 from pydantic import BaseModel, Field
 
 class FileMap(BaseModel):
-    filepath: str = Field(description="The relative file path where this code should be saved (e.g. 'src/main.py' or 'handlers/auth.go').")
+    filepath: str = Field(description="The relative file path where this code should be saved.")
     description: str = Field(description="A brief description of what this file should contain.")
     is_test: bool = Field(description="Set to true if this file is a test file.")
+
+class CustomToolRequest(BaseModel):
+    tool_name: str = Field(description="The name of the CLI tool (e.g. 'custom_pdf_parser').")
+    python_script: str = Field(description="Complete Python code for a CLI script that takes a prompt via standard input (sys.stdin.read()) and prints the result to stdout. This script will be saved and executed as an engine.")
 
 class ArchitectResponse(BaseModel):
     specification: str = Field(description="A detailed markdown description of the overall system architecture, component interactions, and expected behaviors.")
     files: List[FileMap] = Field(description="A list of all files that need to be generated for this task, including implementation and test files.")
+    custom_tools: Optional[List[CustomToolRequest]] = Field(default=[], description="If the task requires processing or actions beyond standard coding, define custom Python CLI scripts here. The orchestrator will dynamically compile and register them as engines.")
 
 class Pricing(BaseModel):
     input_price_per_1m: float

@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "multicliswarm"
-version = "0.5.0"
-description = "A State-of-the-Art Multi-CLI cooperative agent swarm with Visual QA, Git Autopilot, Web Search, and RAG."
+version = "0.6.0"
+description = "A Next-Gen Autonomous AI Ecosystem with Pair Programming, Self-Evolving Tools, and CI/CD Autopilot."
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
@@ -27,10 +27,12 @@ dependencies = [
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp>=1.20.0",
     "duckduckgo-search>=6.0.0",
-    "playwright>=1.40.0"
+    "playwright>=1.40.0",
+    "PyGithub>=2.1.0"
 ]
 
 [project.scripts]
 multicliswarm = "multicliswarm.cli:main"
 multicliswarm-mcp = "multicliswarm.mcp_server:main"
 multicliswarm-ui = "multicliswarm.web_ui:main"
+multicliswarm-ci = "multicliswarm.ci_cd_handler:main"

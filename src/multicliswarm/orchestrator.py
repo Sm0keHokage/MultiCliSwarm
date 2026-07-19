@@ -9,8 +9,8 @@ from typing import List, Dict, Any, Callable, Optional
 from concurrent.futures import ThreadPoolExecutor
 
 from pydantic import ValidationError
-from .engines import get_engine, BaseEngine
-from .schemas import ArchitectResponse, FileMap, estimate_cost
+from .engines import get_engine, BaseEngine, register_custom_engine
+from .schemas import ArchitectResponse, FileMap, CustomToolRequest, estimate_cost
 from .db import save_session, get_session
 from .rag import get_codebase_context
 from .telemetry import get_tracer
@@ -73,7 +73,6 @@ def run_in_docker(language: str, test_cmd: str, output_dir: str, auto_packages: 
         
     abs_dir = os.path.abspath(output_dir)
     
-    # Autonomous Package Management wrapper inside docker
     if auto_packages:
         if lang_clean == "python":
             test_cmd = f"pip install pytest requests; [ -f requirements.txt ] && pip install -r requirements.txt; {test_cmd}"
@@ -84,7 +83,7 @@ def run_in_docker(language: str, test_cmd: str, output_dir: str, auto_packages: 
             
     docker_cmd = [
         "docker", "run", "--rm",
-        "--network", "host" if auto_packages else "none", # Need net to download packages
+        "--network", "host" if auto_packages else "none", 
         "--memory", "512m",
         "--cpus", "1.0",
         "-v", f"{abs_dir}:/workspace:rw",
@@ -115,6 +114,7 @@ class SwarmOrchestrator:
         visual_qa: bool = False,
         auto_packages: bool = False,
         git_autopilot: bool = False,
+        pair_programming: bool = False,
         callback: Optional[Callable[[str, str], None]] = None,
         ask_approval: Optional[Callable[[str, ArchitectResponse], bool]] = None,
         ask_code_approval: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None
@@ -142,6 +142,7 @@ class SwarmOrchestrator:
         self.visual_qa = visual_qa
         self.auto_packages = auto_packages
         self.git_autopilot = git_autopilot
+        self.pair_programming = pair_programming
         
         self.callback = callback
         self.ask_approval = ask_approval
@@ -178,6 +179,21 @@ class SwarmOrchestrator:
             except Exception as e:
                 self._log(f"Formatter {cmd} failed: {e}", "warning")
 
+    def _handle_self_evolving_tools(self, tools: List[CustomToolRequest]):
+        """Dynamically writes tool scripts and registers them as engines."""
+        if not tools: return
+        self._log(f"Self-Evolving Tools: Architect requested {len(tools)} custom tools.", "step")
+        os.makedirs(".multicliswarm_tools", exist_ok=True)
+        for t in tools:
+            script_path = os.path.abspath(f".multicliswarm_tools/{t.tool_name}.py")
+            with open(script_path, "w") as f:
+                f.write(t.python_script)
+            os.chmod(script_path, 0o755)
+            # Register it
+            register_custom_engine(t.tool_name, f"python3 {script_path}")
+            self.developer_engines_names.append(t.tool_name)
+            self._log(f"Registered evolved tool '{t.tool_name}' dynamically.", "success")
+
     def run(
         self,
         task: str,
@@ -204,7 +220,6 @@ class SwarmOrchestrator:
                     for fname, content in old_session['final_files'].items():
                         previous_context += f"\nPrevious Code for {fname}:\n```{lang_norm}\n{content}\n```\n"
 
-            # 1. RAG Context
             rag_context = ""
             if context_dir:
                 self._log(f"Scanning codebase context in {context_dir}...", "info")
@@ -213,7 +228,6 @@ class SwarmOrchestrator:
                     if rag_context:
                         rag_context = f"\n=== EXISTING CODEBASE CONTEXT ===\n{rag_context}\n=================================\n"
 
-            # 2. Web Search / API Docs RAG
             web_context = ""
             if self.web_search:
                 self._log("Fetching real-time documentation from Web...", "info")
@@ -256,8 +270,11 @@ class SwarmOrchestrator:
                 files_map = arch_response.files
                 
                 self._log(f"Architect mapped {len(files_map)} files to create.", "success")
+                
+                # Self-Evolving Tools Injection
+                if arch_response.custom_tools:
+                    self._handle_self_evolving_tools(arch_response.custom_tools)
             
-            # Human-in-the-Loop (Architecture)
             if self.ask_approval:
                 with tracer.start_as_current_span("HITL_Architecture_Approval"):
                     approved = self.ask_approval(task, arch_response)
@@ -273,36 +290,45 @@ class SwarmOrchestrator:
                 with tracer.start_as_current_span(f"Generate_{fname}"):
                     self._log(f"Generating file: {fname} (Test: {fmap.is_test})", "step")
                     
-                    def run_developer(index: int, engine_name: str) -> Dict[str, Any]:
-                        with tracer.start_as_current_span(f"Developer_{engine_name}"):
-                            dev_prompt = f"""
-                            You are a highly skilled Senior Software Engineer.
-                            System Specification:
-                            {spec}
-                            
-                            Your Current Task:
-                            Write ONLY the complete, optimal {language} code for the file: '{fname}'.
-                            Description: {fmap.description}
-                            
-                            Output ONLY the raw {language} code without explanation or markdown blocks.
-                            """
-                            self._log(f"Developer {index+1} ({engine_name}) drafting {fname}...")
-                            try:
-                                engine = get_engine(engine_name)
-                                code_raw = engine.execute(dev_prompt)
-                                code = clean_code(code_raw, language)
-                                self._track_cost(engine_name, dev_prompt, code_raw)
-                                return {"index": index, "engine": engine_name, "code": code}
-                            except Exception as e:
-                                return {"index": index, "engine": engine_name, "code": None, "error": str(e)}
+                    if self.pair_programming and len(self.developer_engines_names) >= 2:
+                        # Pair Programming Mode (Iterative Ping-Pong)
+                        self._log("Pair Programming Mode Active (Driver -> Navigator).", "info")
+                        engine_1 = self.developer_engines_names[0]
+                        engine_2 = self.developer_engines_names[1]
+                        
+                        prompt_driver = f"Task: Write {fname}. Spec:\n{spec}\nOutput ONLY raw {language} code."
+                        code_driver = get_engine(engine_1).execute(prompt_driver)
+                        code_driver = clean_code(code_driver, language)
+                        self._track_cost(engine_1, prompt_driver, code_driver)
+                        
+                        prompt_nav = f"You are pair programming. The Driver wrote this code for {fname}:\n```{lang_norm}\n{code_driver}\n```\nImprove it based on the spec:\n{spec}\nOutput ONLY the final raw {language} code."
+                        code_nav = get_engine(engine_2).execute(prompt_nav)
+                        code_nav = clean_code(code_nav, language)
+                        self._track_cost(engine_2, prompt_nav, code_nav)
+                        
+                        successful_drafts = [{"index": 0, "engine": "Pair_Programming", "code": code_nav}]
+                    else:
+                        # Parallel Independent Mode
+                        def run_developer(index: int, engine_name: str) -> Dict[str, Any]:
+                            with tracer.start_as_current_span(f"Developer_{engine_name}"):
+                                dev_prompt = f"System Specification:\n{spec}\nWrite ONLY the complete {language} code for: '{fname}'.\nDescription: {fmap.description}\nOutput ONLY raw code."
+                                self._log(f"Developer {index+1} ({engine_name}) drafting {fname}...")
+                                try:
+                                    engine = get_engine(engine_name)
+                                    code_raw = engine.execute(dev_prompt)
+                                    code = clean_code(code_raw, language)
+                                    self._track_cost(engine_name, dev_prompt, code_raw)
+                                    return {"index": index, "engine": engine_name, "code": code}
+                                except Exception as e:
+                                    return {"index": index, "engine": engine_name, "code": None, "error": str(e)}
 
-                    drafts = []
-                    with ThreadPoolExecutor(max_workers=len(self.developer_engines_names)) as executor:
-                        futures = [executor.submit(run_developer, i, eng_name) for i, eng_name in enumerate(self.developer_engines_names)]
-                        for fut in futures:
-                            drafts.append(fut.result())
-                            
-                    successful_drafts = [d for d in drafts if d["code"]]
+                        drafts = []
+                        with ThreadPoolExecutor(max_workers=len(self.developer_engines_names)) as executor:
+                            futures = [executor.submit(run_developer, i, eng_name) for i, eng_name in enumerate(self.developer_engines_names)]
+                            for fut in futures:
+                                drafts.append(fut.result())
+                        successful_drafts = [d for d in drafts if d["code"]]
+
                     if not successful_drafts:
                         raise RuntimeError(f"All developers failed to generate {fname}.")
 
@@ -322,24 +348,20 @@ class SwarmOrchestrator:
                         final_files_content[fname] = final_code
                         self._log(f"Synthesized {fname} successfully.", "success")
 
-            # Human-in-the-Loop (Interactive Code Diff Approval via UI)
             if self.ask_code_approval:
                 with tracer.start_as_current_span("HITL_Code_Approval"):
                     self._log("Waiting for user to approve/edit generated code in the UI...", "info")
                     final_files_content = self.ask_code_approval(final_files_content)
 
-            # Save to disk
             for fname, code in final_files_content.items():
                 fpath = os.path.join(output_dir, fname)
                 os.makedirs(os.path.dirname(fpath) or ".", exist_ok=True)
                 with open(fpath, "w") as f:
                     f.write(code)
 
-            # --- AUTO-FORMATTING ---
             with tracer.start_as_current_span("Auto_Formatting"):
                 self.format_code(language, output_dir)
                 
-            # --- Visual QA Check ---
             visual_issues = ""
             if self.visual_qa:
                 with tracer.start_as_current_span("Visual_QA"):
@@ -358,7 +380,6 @@ class SwarmOrchestrator:
                             except Exception as e:
                                 self._log(f"Visual QA analysis failed: {e}", "warning")
 
-            # --- 5. VERIFICATION & DEBUGGING ---
             with tracer.start_as_current_span("Phase_5_Verification"):
                 self._log("Phase 5: Global Verification & Auto-Debugging", "step")
                 raw_test_cmd = test_cmd or DEFAULT_TEST_CMDS.get(lang_norm, "echo 'No tests run'")
@@ -414,12 +435,11 @@ class SwarmOrchestrator:
                                         self._log(f"Debugger patched {fn}.", "success")
                                         
                                 self.format_code(language, output_dir)
-                                visual_issues = "" # Reset visual issues for next iteration
+                                visual_issues = ""
                             except Exception as e:
                                 self._log(f"Debugger execution failed: {e}", "error")
                                 break
 
-            # --- Git Autopilot ---
             if self.git_autopilot:
                 with tracer.start_as_current_span("Git_Autopilot"):
                     branch_name = f"swarm-feat-{session_id[:8]}"
@@ -430,7 +450,6 @@ class SwarmOrchestrator:
             self._log(f"Total Swarm Cost Estimate: ${self.total_cost:.5f} USD", "info")
             span.set_attribute("cost_usd", self.total_cost)
 
-            # Save to SQLite
             save_session(session_id, task, language, spec, files_map, final_files_content, self.total_cost)
 
             return {
