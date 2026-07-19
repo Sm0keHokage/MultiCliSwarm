@@ -5,6 +5,7 @@ import re
 import uuid
 import subprocess
 import logging
+import threading
 from typing import List, Dict, Any, Callable, Optional
 from concurrent.futures import ThreadPoolExecutor
 
@@ -22,6 +23,8 @@ from .git_autopilot import create_branch_and_commit
 from .patching import apply_patch
 from .benchmarking import run_performance_test
 from .deployers import run_deploy
+from .security import run_security_audit
+from .docs_engine import generate_docs
 
 logger = logging.getLogger("multicliswarm.orchestrator")
 tracer = get_tracer()
@@ -80,7 +83,7 @@ def run_in_docker(language: str, test_cmd: str, output_dir: str, auto_packages: 
     
     if auto_packages:
         if lang_clean == "python":
-            test_cmd = f"pip install pytest pytest-benchmark requests; [ -f requirements.txt ] && pip install -r requirements.txt; {test_cmd}"
+            test_cmd = f"pip install pytest pytest-benchmark bandit requests; [ -f requirements.txt ] && pip install -r requirements.txt; {test_cmd}"
         elif lang_clean == "javascript" or lang_clean == "typescript":
             test_cmd = f"npm init -y; npm install; {test_cmd}"
         elif lang_clean == "go":
@@ -124,9 +127,12 @@ class SwarmOrchestrator:
         semantic_cache: bool = False,
         performance_bench: bool = False,
         reviewer_consensus: bool = False,
+        security_audit: bool = False,
+        auto_docs: bool = False,
         callback: Optional[Callable[[str, str], None]] = None,
         ask_approval: Optional[Callable[[str, ArchitectResponse], bool]] = None,
-        ask_code_approval: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None
+        ask_code_approval: Optional[Callable[[Dict[str, str]], Dict[str, str]]] = None,
+        live_chat_interrupt: Optional[Callable[[], Optional[str]]] = None
     ):
         if auto_route:
             developer_engines = ["gemini,mock"] if not developer_engines else developer_engines
@@ -156,13 +162,15 @@ class SwarmOrchestrator:
         self.semantic_cache_enabled = semantic_cache
         self.performance_bench = performance_bench
         self.reviewer_consensus = reviewer_consensus
+        self.security_audit_enabled = security_audit
+        self.auto_docs_enabled = auto_docs
         
         self.callback = callback
         self.ask_approval = ask_approval
         self.ask_code_approval = ask_code_approval
+        self.live_chat_interrupt = live_chat_interrupt
         
         self.total_cost = 0.0
-        
         self.cache = SemanticCache() if semantic_cache else None
         self.indexer = CodeIndexer() if semantic_rag else None
 
@@ -178,6 +186,15 @@ class SwarmOrchestrator:
             
         if self.callback:
             self.callback(level, message)
+
+    def _check_interrupts(self) -> str:
+        """Checks if a user has sent a mid-process chat message to adjust course."""
+        if self.live_chat_interrupt:
+            msg = self.live_chat_interrupt()
+            if msg:
+                self._log(f"Live Intervention Received: '{msg}'", "warning")
+                return f"\n[USER INTERVENTION]: {msg}\n"
+        return ""
 
     def _track_cost(self, engine_name: str, prompt: str, response: str):
         in_tokens = len(prompt) // 4
@@ -227,6 +244,7 @@ class SwarmOrchestrator:
             self.total_cost = 0.0
             session_id = resume_session_id or str(uuid.uuid4())
             previous_context = ""
+            intervention_context = ""
             
             if resume_snapshot_id:
                 snapshot = load_snapshot(resume_snapshot_id)
@@ -313,15 +331,19 @@ class SwarmOrchestrator:
                 fname = fmap.filepath
                 with tracer.start_as_current_span(f"Generate_{fname}"):
                     self._log(f"Generating file: {fname} (Test: {fmap.is_test})", "step")
+                    
+                    # Mid-process intervention check
+                    intervention_context += self._check_interrupts()
+                    
                     if self.pair_programming and len(self.developer_engines_names) >= 2:
                         self._log("Pair Programming Mode Active (Driver -> Navigator).", "info")
                         engine_1 = self.developer_engines_names[0]
                         engine_2 = self.developer_engines_names[1]
-                        prompt_driver = f"Task: Write {fname}. Spec:\n{spec}\nOutput ONLY raw {language} code."
+                        prompt_driver = f"Task: Write {fname}. Spec:\n{spec}\n{intervention_context}\nOutput ONLY raw {language} code."
                         code_driver = get_engine(engine_1).execute(prompt_driver)
                         code_driver = clean_code(code_driver, language)
                         self._track_cost(engine_1, prompt_driver, code_driver)
-                        prompt_nav = f"You are pair programming. The Driver wrote this code for {fname}:\n```{lang_norm}\n{code_driver}\n```\nImprove it based on the spec:\n{spec}\nOutput ONLY the final raw {language} code."
+                        prompt_nav = f"You are pair programming. The Driver wrote this code for {fname}:\n```{lang_norm}\n{code_driver}\n```\nImprove it based on the spec:\n{spec}\n{intervention_context}\nOutput ONLY the final raw {language} code."
                         code_nav = get_engine(engine_2).execute(prompt_nav)
                         code_nav = clean_code(code_nav, language)
                         self._track_cost(engine_2, prompt_nav, code_nav)
@@ -329,7 +351,7 @@ class SwarmOrchestrator:
                     else:
                         def run_developer(index: int, engine_name: str) -> Dict[str, Any]:
                             with tracer.start_as_current_span(f"Developer_{engine_name}"):
-                                dev_prompt = f"System Specification:\n{spec}\nWrite ONLY the complete {language} code for: '{fname}'.\nDescription: {fmap.description}\nOutput ONLY raw code."
+                                dev_prompt = f"System Specification:\n{spec}\n{intervention_context}\nWrite ONLY the complete {language} code for: '{fname}'.\nDescription: {fmap.description}\nOutput ONLY raw code."
                                 self._log(f"Developer {index+1} ({engine_name}) drafting {fname}...")
                                 try:
                                     engine = get_engine(engine_name)
@@ -352,7 +374,7 @@ class SwarmOrchestrator:
                     # --- 3. PEER REVIEWER (With Consensus Option) ---
                     with tracer.start_as_current_span("Phase_3_Reviewer"):
                         review_context = "".join([f"### Draft {sd['index'] + 1}\n```{lang_norm}\n{sd['code']}\n```\n" for sd in successful_drafts])
-                        reviewer_prompt = f"Analyze these drafts for '{fname}' based on spec:\n{spec}\n\nDrafts:\n{review_context}\nProvide strict critique and synthesis advice."
+                        reviewer_prompt = f"Analyze these drafts for '{fname}' based on spec:\n{spec}\n{intervention_context}\nDrafts:\n{review_context}\nProvide strict critique and synthesis advice."
                         
                         if self.reviewer_consensus:
                             self._log("Reviewer Consensus Protocol: Gathering multiple opinions...", "info")
@@ -374,7 +396,7 @@ class SwarmOrchestrator:
 
                     # --- 4. SYNTHESIZER ---
                     with tracer.start_as_current_span("Phase_4_Synthesizer"):
-                        synth_prompt = f"Synthesize the absolute best code for '{fname}'.\nSpec:\n{spec}\n\nDrafts:\n{review_context}\nReviewer Feedback:\n{review_feedback}\nOutput ONLY raw code."
+                        synth_prompt = f"Synthesize the absolute best code for '{fname}'.\nSpec:\n{spec}\n{intervention_context}\nDrafts:\n{review_context}\nReviewer Feedback:\n{review_feedback}\nOutput ONLY raw code."
                         final_code_raw = self.synthesizer_engine.execute(synth_prompt)
                         self._track_cost(self.synthesizer_engine_name, synth_prompt, final_code_raw)
                         final_code = clean_code(final_code_raw, language)
@@ -427,16 +449,22 @@ class SwarmOrchestrator:
                             self._log(f"All tests PASSED successfully in cycle {cycle}!", "success")
                             tests_passed = True
                             
-                            # --- 5.1 Performance Benchmarking (v1.1.0) ---
+                            # --- 5.1 Performance Benchmarking ---
                             if self.performance_bench:
                                 with tracer.start_as_current_span("Performance_Benchmarking"):
                                     self._log("Running performance benchmarks...", "info")
-                                    # Identify a test file to run benchmark on
                                     test_file = next((f for f in final_files_content.keys() if "test" in f), None)
                                     if test_file:
                                         bench_report = run_performance_test(language, test_file, output_dir)
                                         self._log(f"Performance Report:\n{bench_report}", "info")
-                                        # Optionally iterate if bench report is poor (Future logic)
+                                        
+                            # --- 5.2 Security Shield (v1.2.0) ---
+                            if self.security_audit_enabled:
+                                with tracer.start_as_current_span("Security_Shield"):
+                                    self._log("Running Security Shield SAST audit...", "step")
+                                    audit_result = run_security_audit(language, output_dir)
+                                    if audit_result.get("status") == "completed":
+                                        self._log(f"Security Audit completed. Report: {json.dumps(audit_result.get('report', audit_result.get('raw_output'))[:1000])}", "info")
                             break
                         else:
                             self._log("Tests FAILED. Invoking Debugger with Surgical Patching...", "warning")
@@ -453,20 +481,27 @@ class SwarmOrchestrator:
                                     if p.filepath in final_files_content:
                                         final_files_content[p.filepath] = apply_patch(final_files_content[p.filepath], p.blocks)
                                         with open(os.path.join(output_dir, p.filepath), "w") as f: f.write(final_files_content[p.filepath])
-                                        self._log(f"Debugger patched {p.filepath}.", "success")
+                                        self._log(f"Debugger surgically patched {p.filepath}.", "success")
                                 self.format_code(language, output_dir)
                                 visual_issues = ""
                             except Exception as e:
                                 self._log(f"Debugger failed: {e}", "error")
                                 break
 
-            # --- 6. Cloud Deployment (v1.1.0) ---
+            # --- 6. Cloud Deployment ---
             deploy_url = None
             if deploy_provider and tests_passed:
                 with tracer.start_as_current_span(f"Cloud_Deploy_{deploy_provider}"):
                     self._log(f"Deploying to {deploy_provider}...", "step")
                     deploy_url = run_deploy(deploy_provider, output_dir)
                     self._log(f"Deploy Successful! URL: {deploy_url}", "success")
+                    
+            # --- 7. Auto Documentation (v1.2.0) ---
+            if self.auto_docs_enabled and tests_passed:
+                with tracer.start_as_current_span("Docs_Generation"):
+                    self._log("Phase 7: Generating Self-Healing Documentation", "step")
+                    generate_docs(output_dir, language)
+                    self._log("Documentation portal generated in ./docs", "success")
 
             if self.git_autopilot:
                 with tracer.start_as_current_span("Git_Autopilot"):
@@ -475,6 +510,9 @@ class SwarmOrchestrator:
                     create_branch_and_commit(output_dir, branch_name, msg)
 
             self._log(f"Total Session Cost: ${self.total_cost:.5f} USD", "info")
+            if tests_passed:
+                create_snapshot(session_id, f"Auto-save after: {task[:30]}", spec, final_files_content)
+
             save_session(session_id, task, language, spec, files_map, final_files_content, self.total_cost)
 
             return {

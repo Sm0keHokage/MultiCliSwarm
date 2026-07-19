@@ -2,7 +2,7 @@ import asyncio
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import json
 import threading
 import uuid
@@ -11,8 +11,9 @@ import os
 
 from .orchestrator import SwarmOrchestrator
 from .schemas import ArchitectResponse
+from .visualizer import generate_dependency_graph
 
-app = FastAPI(title="MultiCliSwarm SOTA Control Panel")
+app = FastAPI(title="MultiCliSwarm v1.2.0 - Elite Control Panel")
 
 class SwarmRequest(BaseModel):
     task: str
@@ -22,10 +23,19 @@ class SwarmRequest(BaseModel):
     auto_route: bool = True
     context_dir: str = ""
     pair_programming: bool = False
+    semantic_rag: bool = True
+    semantic_cache: bool = True
+    performance_bench: bool = True
+    reviewer_consensus: bool = True
+    security_audit: bool = True
+    auto_docs: bool = True
 
 class CodeApprovalRequest(BaseModel):
     approval_id: str
     files: Dict[str, str]
+
+class ChatMessage(BaseModel):
+    message: str
 
 class ConnectionManager:
     def __init__(self):
@@ -48,6 +58,7 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 pending_approvals = {}
+live_interventions = [] # Queue for the current session
 
 @app.websocket("/ws/logs")
 async def websocket_endpoint(websocket: WebSocket):
@@ -69,31 +80,30 @@ def get_ws_callback():
             pass
     return callback
 
-def ui_ask_approval(task: str, arch: ArchitectResponse) -> bool:
-    return True
-
 def ui_ask_code_approval(files_dict: Dict[str, str]) -> Dict[str, str]:
     approval_id = str(uuid.uuid4())
     event = threading.Event()
-    pending_approvals[approval_id] = {
-        "event": event,
-        "files": files_dict
-    }
+    pending_approvals[approval_id] = {"event": event, "files": files_dict}
     
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            payload = {
-                "type": "code_approval",
-                "approval_id": approval_id,
-                "files": files_dict
-            }
+            payload = {"type": "code_approval", "approval_id": approval_id, "files": files_dict}
             loop.create_task(manager.broadcast(payload))
-    except Exception:
-        pass
+    except Exception: pass
         
     event.wait()
     return pending_approvals[approval_id]["files"]
+
+def ui_chat_interrupt() -> Optional[str]:
+    if live_interventions:
+        return live_interventions.pop(0)
+    return None
+
+@app.post("/api/chat")
+async def send_chat(req: ChatMessage):
+    live_interventions.append(req.message)
+    return {"status": "received"}
 
 @app.post("/api/approve_code")
 async def approve_code(req: CodeApprovalRequest):
@@ -101,13 +111,16 @@ async def approve_code(req: CodeApprovalRequest):
         pending_approvals[req.approval_id]["files"] = req.files
         pending_approvals[req.approval_id]["event"].set()
         return {"status": "success"}
-    return {"status": "error", "message": "Approval ID not found."}
+    return {"status": "error"}
+
+@app.get("/api/visualize")
+async def get_viz(project_dir: str = "."):
+    return generate_dependency_graph(project_dir)
 
 @app.get("/api/sessions")
 async def get_sessions():
     DB_PATH = os.path.expanduser("~/.multicliswarm.db")
-    if not os.path.exists(DB_PATH):
-        return []
+    if not os.path.exists(DB_PATH): return []
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT session_id, task, timestamp FROM sessions ORDER BY timestamp DESC LIMIT 20")
@@ -118,7 +131,6 @@ async def get_sessions():
 @app.post("/api/run")
 async def run_swarm(req: SwarmRequest):
     engines = [e.strip() for e in req.developer_engines.split(",")]
-    context = req.context_dir if req.context_dir else None
     
     orchestrator = SwarmOrchestrator(
         architect_engine="gemini",
@@ -129,13 +141,20 @@ async def run_swarm(req: SwarmRequest):
         use_docker=req.use_docker,
         auto_route=req.auto_route,
         pair_programming=req.pair_programming,
+        semantic_rag=req.semantic_rag,
+        semantic_cache=req.semantic_cache,
+        performance_bench=req.performance_bench,
+        reviewer_consensus=req.reviewer_consensus,
+        security_audit=req.security_audit,
+        auto_docs=req.auto_docs,
         callback=get_ws_callback(),
-        ask_approval=ui_ask_approval,
-        ask_code_approval=ui_ask_code_approval
+        ask_code_approval=ui_ask_code_approval,
+        live_chat_interrupt=ui_chat_interrupt
     )
     
     try:
-        result = orchestrator.run(task=req.task, language=req.language, context_dir=context)
+        # In a real async app, run in thread. Blocking for now as per previous logic.
+        result = orchestrator.run(task=req.task, language=req.language, context_dir=req.context_dir)
         return {
             "status": "success",
             "success": result["success"],
@@ -151,165 +170,173 @@ def read_root():
     html_content = """
     <html>
         <head>
-            <title>MultiCliSwarm v0.6.0 - Team Space</title>
+            <title>MultiCliSwarm v1.2.0 - Ascension Suite</title>
             <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.38.0/min/vs/loader.js"></script>
+            <script src="https://d3js.org/d3.v7.min.js"></script>
             <style>
-                body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #0e0e1a; margin: 0; display: flex; height: 100vh; color: #fff; }
-                .sidebar { width: 320px; padding: 20px; background: #1a1a2e; box-shadow: 2px 0 5px rgba(0,0,0,0.5); overflow-y: auto; display: flex; flex-direction: column; gap: 15px;}
-                .main { flex-grow: 1; display: flex; flex-direction: column; background: #0e0e1a; }
-                .log-box { flex-grow: 1; background: #000; color: #00ff00; padding: 15px; overflow-y: scroll; font-family: 'Fira Code', monospace; font-size: 14px;}
+                body { font-family: 'Inter', sans-serif; background-color: #05050a; margin: 0; display: flex; height: 100vh; color: #e0e0e0; }
+                .sidebar { width: 340px; padding: 25px; background: #0c0c16; border-right: 1px solid #1e1e2e; overflow-y: auto; display: flex; flex-direction: column; gap: 20px;}
+                .main { flex-grow: 1; display: flex; flex-direction: column; background: #05050a; }
+                .log-box { flex-grow: 1; background: #000; color: #00ffaa; padding: 20px; overflow-y: scroll; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.5; border-bottom: 1px solid #1e1e2e; }
+                .chat-box { height: 60px; background: #0c0c16; padding: 10px; display: flex; gap: 10px; border-top: 1px solid #1e1e2e;}
                 .editor-box { display: none; flex-grow: 1; flex-direction: column; background: #1e1e1e; }
-                #monaco-container { flex-grow: 1; border-top: 1px solid #333; }
-                .editor-header { padding: 10px; background: #2a2a3e; color: white; display: flex; justify-content: space-between; align-items: center;}
-                input, select { padding: 12px; margin: 0; width: 100%; box-sizing: border-box; border: 1px solid #333; border-radius: 6px; background: #2a2a3e; color: white; }
-                button { background-color: #5a32fa; color: white; border: none; cursor: pointer; padding: 12px; border-radius: 6px; font-weight: bold; transition: background 0.3s;}
-                button:hover { background-color: #4824d6; }
-                .btn-success { background-color: #28a745; }
-                .btn-success:hover { background-color: #218838; }
-                .sessions-list { margin-top: 20px; border-top: 1px solid #333; padding-top: 15px;}
-                .session-item { padding: 10px; background: #2a2a3e; border-radius: 6px; margin-bottom: 10px; cursor: pointer; font-size: 12px;}
-                .session-item:hover { background: #3a3a5e; }
-                .step { color: #d782ff; font-weight: bold; }
-                .success { color: #00ff9d; }
-                .warning { color: #ffb86c; }
-                .error { color: #ff5555; }
-                .info { color: #8be9fd; }
-                h2, h3 { margin: 0; color: #fff; }
-                label { font-size: 14px; display: flex; align-items: center; gap: 8px;}
+                #monaco-container { flex-grow: 1; }
+                .tab-bar { display: flex; background: #0c0c16; border-bottom: 1px solid #1e1e2e;}
+                .tab { padding: 12px 25px; cursor: pointer; border-bottom: 2px solid transparent; transition: 0.3s; font-size: 14px; font-weight: 500;}
+                .tab.active { border-bottom: 2px solid #5a32fa; color: #fff; background: #16162a; }
+                input, select { padding: 12px; width: 100%; box-sizing: border-box; border: 1px solid #1e1e2e; border-radius: 8px; background: #16162a; color: white; outline: none;}
+                button { background: linear-gradient(135deg, #5a32fa 0%, #4824d6 100%); color: white; border: none; cursor: pointer; padding: 12px; border-radius: 8px; font-weight: 600; transition: transform 0.2s;}
+                button:hover { transform: translateY(-2px); }
+                .session-item { padding: 12px; background: #16162a; border-radius: 8px; margin-bottom: 12px; cursor: pointer; font-size: 13px; border: 1px solid #1e1e2e;}
+                .session-item:hover { border-color: #5a32fa; }
+                .step { color: #ff00ff; } .success { color: #00ffaa; } .warning { color: #ffaa00; } .info { color: #00ccff; }
+                #viz-container { width: 100%; height: 100%; display: none; position: relative;}
+                circle { fill: #5a32fa; stroke: #fff; stroke-width: 1.5px; }
+                line { stroke: #444; stroke-opacity: 0.6; stroke-width: 1px; }
+                text { font-size: 10px; fill: #ccc; pointer-events: none; }
             </style>
         </head>
         <body>
             <div class="sidebar">
-                <h2>MultiCliSwarm <span style="font-size: 12px; color: #8be9fd;">v0.6.0</span></h2>
-                <input type="text" id="task" placeholder="Describe the feature or issue..." />
-                <input type="text" id="language" placeholder="Language (go, python, js)" value="python" />
-                <input type="text" id="context_dir" placeholder="Local project path for RAG" />
+                <h1 style="font-size: 22px; margin: 0; background: linear-gradient(to right, #8be9fd, #bd93f9); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Swarm Elite <span style="font-size: 12px; color: #6272a4;">v1.2.0</span></h1>
+                <input type="text" id="task" placeholder="Task for the Swarm..." />
+                <input type="text" id="language" placeholder="Language (go, py, js...)" value="python" />
+                <input type="text" id="context_dir" placeholder="Context directory (RAG)" />
                 
-                <div style="display:flex; flex-direction:column; gap:8px;">
-                    <label><input type="checkbox" id="auto_route" checked> Dynamic Model Routing</label>
-                    <label><input type="checkbox" id="pair_programming"> Pair Programming Mode</label>
-                    <label><input type="checkbox" id="use_docker"> Docker Sandboxing</label>
+                <div style="font-size: 12px; color: #6272a4;">Production Features:</div>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+                    <label><input type="checkbox" id="auto_route" checked> Route</label>
+                    <label><input type="checkbox" id="semantic_rag" checked> RAG</label>
+                    <label><input type="checkbox" id="security_audit" checked> Security</label>
+                    <label><input type="checkbox" id="performance_bench" checked> Bench</label>
+                    <label><input type="checkbox" id="pair_programming"> Pair</label>
+                    <label><input type="checkbox" id="use_docker"> Docker</label>
                 </div>
                 
-                <button onclick="runSwarm()">Launch Autonomous Swarm</button>
+                <button onclick="runSwarm()">🚀 Deploy Swarm</button>
                 
-                <div class="sessions-list" id="sessions-list">
-                    <h3>Team Session History</h3>
-                    <div id="session-items"></div>
-                </div>
+                <div id="session-items"></div>
             </div>
             
             <div class="main">
+                <div class="tab-bar">
+                    <div class="tab active" onclick="showTab('logs')">Live Logs</div>
+                    <div class="tab" onclick="showTab('editor')">Review Code</div>
+                    <div class="tab" onclick="showTab('viz')">Architecture Map</div>
+                </div>
+                
                 <div id="logs" class="log-box"></div>
+                <div id="viz-container"></div>
                 
                 <div id="editor-wrapper" class="editor-box">
-                    <div class="editor-header">
-                        <span>Review & Edit Generated Code: <select id="file-select" onchange="switchFile()"></select></span>
-                        <button class="btn-success" style="width: auto; margin:0;" onclick="submitCodeApproval()">Approve & Deploy</button>
+                    <div style="padding:10px; background:#16162a; display:flex; justify-content:space-between;">
+                        <select id="file-select" style="width:250px;" onchange="switchFile()"></select>
+                        <button class="btn-success" onclick="submitCodeApproval()">Accept & Finalize</button>
                     </div>
                     <div id="monaco-container"></div>
+                </div>
+
+                <div class="chat-box">
+                    <input type="text" id="chat-input" placeholder="Interrupt swarm / Send instruction..." />
+                    <button style="width: 100px;" onclick="sendChat()">Send</button>
                 </div>
             </div>
             
             <script>
                 var ws = new WebSocket("ws://" + window.location.host + "/ws/logs");
                 var monacoEditor = null;
-                var currentApprovalId = null;
                 var currentFiles = {};
                 var activeFile = null;
 
                 require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.38.0/min/vs' }});
                 require(['vs/editor/editor.main'], function() {
                     monacoEditor = monaco.editor.create(document.getElementById('monaco-container'), {
-                        value: '',
-                        language: 'python',
-                        theme: 'vs-dark'
+                        value: '', language: 'python', theme: 'vs-dark'
                     });
-                    
-                    monacoEditor.onDidChangeModelContent((e) => {
-                        if (activeFile) {
-                            currentFiles[activeFile] = monacoEditor.getValue();
-                        }
-                    });
+                    monacoEditor.onDidChangeModelContent(() => { if(activeFile) currentFiles[activeFile] = monacoEditor.getValue(); });
                 });
 
                 ws.onmessage = function(event) {
                     var data = JSON.parse(event.data);
-                    
                     if (data.type === 'log') {
                         var logs = document.getElementById('logs');
-                        var span = document.createElement('span');
-                        span.className = data.level;
-                        span.innerHTML = "[" + data.level.toUpperCase() + "] " + data.message + "<br/>";
-                        logs.appendChild(span);
+                        logs.innerHTML += `<span class="${data.level}">[${data.level.toUpperCase()}] ${data.message}</span><br/>`;
                         logs.scrollTop = logs.scrollHeight;
                     } 
                     else if (data.type === 'code_approval') {
-                        document.getElementById('logs').style.display = 'none';
-                        document.getElementById('editor-wrapper').style.display = 'flex';
-                        
-                        currentApprovalId = data.approval_id;
+                        showTab('editor');
                         currentFiles = data.files;
-                        
                         var select = document.getElementById('file-select');
                         select.innerHTML = '';
-                        for (var fname in currentFiles) {
-                            var opt = document.createElement('option');
-                            opt.value = fname;
-                            opt.innerHTML = fname;
-                            select.appendChild(opt);
+                        for (var f in currentFiles) {
+                            var opt = document.createElement('option'); opt.value = f; opt.innerHTML = f; select.appendChild(opt);
                         }
-                        
                         activeFile = Object.keys(currentFiles)[0];
                         monacoEditor.setValue(currentFiles[activeFile]);
                     }
                 };
 
+                function showTab(name) {
+                    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                    event.target.classList.add('active');
+                    document.getElementById('logs').style.display = name === 'logs' ? 'block' : 'none';
+                    document.getElementById('editor-wrapper').style.display = name === 'editor' ? 'flex' : 'none';
+                    document.getElementById('viz-container').style.display = name === 'viz' ? 'block' : 'none';
+                    if(name === 'viz') runViz();
+                }
+
+                async function sendChat() {
+                    var input = document.getElementById('chat-input');
+                    await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ message: input.value }), headers: {'Content-Type': 'application/json'} });
+                    input.value = '';
+                }
+
+                async function submitCodeApproval() {
+                    showTab('logs');
+                    await fetch('/api/approve_code', { method: 'POST', body: JSON.stringify({ approval_id: currentApprovalId, files: currentFiles }), headers: {'Content-Type': 'application/json'} });
+                }
+
+                function runViz() {
+                    var width = document.getElementById('viz-container').clientWidth;
+                    var height = document.getElementById('viz-container').clientHeight;
+                    d3.select("#viz-container svg").remove();
+                    var svg = d3.select("#viz-container").append("svg").attr("width", width).attr("height", height);
+                    
+                    fetch('/api/visualize').then(r => r.json()).then(data => {
+                        var simulation = d3.forceSimulation(data.nodes).force("link", d3.forceLink(data.links).id(d) => d.id).force("charge", d3.forceManyBody().strength(-100)).force("center", d3.forceCenter(width/2, height/2));
+                        var link = svg.append("g").selectAll("line").data(data.links).enter().append("line");
+                        var node = svg.append("g").selectAll("circle").data(data.nodes).enter().append("circle").attr("r", 8).call(d3.drag().on("start", dragstarted).on("drag", dragged).on("end", dragended));
+                        node.append("title").text(d => d.label);
+                        simulation.on("tick", () => {
+                            link.attr("x1", d => d.source.x).attr("y1", d => d.source.y).attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+                            node.attr("cx", d => d.x).attr("cy", d => d.y);
+                        });
+                        function dragstarted(event, d) { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; }
+                        function dragged(event, d) { d.fx = event.x; d.fy = event.y; }
+                        function dragended(event, d) { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }
+                    });
+                }
+
+                async function runSwarm() {
+                    document.getElementById('logs').innerHTML = "";
+                    var req = {
+                        task: document.getElementById('task').value,
+                        language: document.getElementById('language').value,
+                        context_dir: document.getElementById('context_dir').value,
+                        auto_route: document.getElementById('auto_route').checked,
+                        use_docker: document.getElementById('use_docker').checked,
+                        semantic_rag: document.getElementById('semantic_rag').checked,
+                        security_audit: document.getElementById('security_audit').checked,
+                        performance_bench: document.getElementById('performance_bench').checked,
+                        pair_programming: document.getElementById('pair_programming').checked
+                    };
+                    fetch('/api/run', { method: 'POST', body: JSON.stringify(req), headers: {'Content-Type': 'application/json'} });
+                }
+                
                 function switchFile() {
                     activeFile = document.getElementById('file-select').value;
                     monacoEditor.setValue(currentFiles[activeFile]);
                 }
-
-                async function submitCodeApproval() {
-                    document.getElementById('editor-wrapper').style.display = 'none';
-                    document.getElementById('logs').style.display = 'block';
-                    
-                    await fetch('/api/approve_code', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ approval_id: currentApprovalId, files: currentFiles })
-                    });
-                    loadSessions();
-                }
-                
-                async function runSwarm() {
-                    document.getElementById('logs').innerHTML = "";
-                    var task = document.getElementById('task').value;
-                    var lang = document.getElementById('language').value;
-                    var ctx = document.getElementById('context_dir').value;
-                    var route = document.getElementById('auto_route').checked;
-                    var pair = document.getElementById('pair_programming').checked;
-                    var docker = document.getElementById('use_docker').checked;
-                    
-                    fetch('/api/run', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ task: task, language: lang, use_docker: docker, auto_route: route, context_dir: ctx, pair_programming: pair })
-                    });
-                }
-                
-                async function loadSessions() {
-                    const res = await fetch('/api/sessions');
-                    const sessions = await res.json();
-                    let html = '';
-                    for(let s of sessions) {
-                        html += `<div class="session-item" title="${s.id}"><b>${s.date.split(' ')[0]}</b>: ${s.task}</div>`;
-                    }
-                    document.getElementById('session-items').innerHTML = html;
-                }
-                
-                // Init load
-                loadSessions();
             </script>
         </body>
     </html>

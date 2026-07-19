@@ -2,112 +2,107 @@
 
 Multi-CLI Swarm is a professional, **universal (language-agnostic)** implementation of the **MARE (Multi-Agent Refinement & Evaluation)** algorithm. It orchestrates a cooperative team of localized AI CLI models (`gemini`, `codex`, and optionally `claude`) using the principles of **Theory of Decision Making (TTPR)**, **Game Theory (Minimax peer review)**, and **Condorcet's Jury Theorem (Wisdom of the Crowd)**.
 
-This framework is built as a **modular Python package (SDK)**, allowing seamless integration into any external system, web service, IDE, or CI/CD pipeline.
+---
+
+## 🚀 The Elite Suite (v1.2.0) - Ascension
+
+Version 1.2.0 is the definitive release, elevating Multi-CLI Swarm to an elite, enterprise-ready software engineering ecosystem:
+
+* **🛡️ Security Shield (SAST):** Automatically run security audits (e.g., `bandit`, `npm audit`) on generated code. The Swarm identifies and fixes vulnerabilities (SQLi, XSS, insecure dependencies) before they ever reach production.
+* **🗺️ Architecture Visualizer:** Explore your project's soul. The Web UI now features an interactive D3.js dependency graph, showing how files and modules interact.
+* **💬 Live Collaboration Chat:** Don't just watch—intervene! Send real-time instructions to the Swarm during any phase to adjust architecture or change implementation details on-the-fly.
+* **📚 Self-Healing Documentation:** Automatically generate professional documentation portals (MkDocs, Swagger/OpenAPI) for every project.
+* **🏎️ Performance Benchmarking:** Automated profiling and benchmarking ensure your code isn't just correct, but highly optimized.
+* **🤝 Consensus Protocol:** Committee-based peer review for mission-critical code reliability.
+* **⚡ Semantic RAG & Caching:** Hyper-efficient indexing with ChromaDB and up to 40% cost reduction via semantic reasoning reuse.
+* **🌿 Session Branching:** Non-destructive experimentation with state snapshots and rollbacks.
+* **🐙 CI/CD & Git Autopilot:** Seamless integration into GitHub Actions with automated branching and PRs.
+* **👁️ Visual Vision QA:** Headless Playwright browser testing with multimodal UI critique.
 
 ---
 
-## 🚀 Production Release (v1.0.0)
-
-Version 1.0.0 marks the transition to a high-performance, enterprise-ready autonomous developer ecosystem:
-
-* **⚡ Semantic RAG (ChromaDB):** Efficiently indexes massive codebases and retrieves only the most relevant functions and files for each task using vector search.
-* **💎 Semantic Caching:** Saves up to 40% on token costs by caching and reusing AI reasonings for similar tasks using semantic similarity.
-* **🌿 Session Branching & Snapshots:** Non-destructive experimentation! Create snapshots of your session, try different architectures, and rollback instantly if a path leads to a dead end.
-* **💉 Surgical Patching:** Debugger generates minimal **Search/Replace blocks** (Unified Diffs) instead of rewriting files, ensuring precision in large projects.
-* **🛡️ Resilient Failover:** Automatic exponential backoff and engine-hopping (e.g., failing over from Claude to Gemini) for 100% uptime.
-* **🛠️ Self-Evolving Tools:** The Swarm writes its own Python CLI tools on-the-fly to solve complex environmental problems.
-* **🤖 Pair Programming Mode:** Driver -> Navigator interactive coding paradigm between AI agents.
-* **🔁 CI/CD Autopilot:** GitHub Action to automatically fix repo issues via labels.
-* **👁️ Visual QA:** Playwright-powered headless vision testing for frontend verification.
-* **🐙 Git Autopilot:** Fully automated branching, staging, and Semantic Commits.
-* **🌐 Web Search RAG:** Real-time API documentation retrieval from DuckDuckGo.
-* **👥 Team Spaces Web UI:** Multi-session dashboard with persistent history and interactive Monaco Editor.
-* **🛡️ Secure Docker Sandboxing:** Tests run in isolated Alpine containers.
-
----
-
-## 📐 Swarm Pipeline
+## 📐 Pipeline Lifecycle
 
 ```
-          [User Task] + [Semantic RAG Context] + [Web Search Docs]
+          [User Task] + [Semantic RAG] + [Web Search Docs]
                               │
-                              ▼
+                    [ 💬 Live Chat Intervention ]
+                              │
                 ┌───────────────────────────┐
-                │     Step 1: Architect     │ (Semantic Cache Lookup -> CoT Thinking)
+                │     Step 1: Architect     │ (Designs plan, Thinking, Schema)
                 └─────────────┬─────────────┘
                               │
                         [ 👤 HITL Approval ]
                               │
                               ▼
                 ┌───────────────────────────┐
-                │  Step 2: Developers       │ (Pair Programming OR Parallel Drafting)
+                │  Step 2: Developers       │ (Driver/Navigator Pair Programming)
                 └─────────────┬─────────────┘
                               │
                               ▼
                 ┌───────────────────────────┐
-                │     Step 3: Reviewer      │ (Critiques drafts, finds edge cases)
+                │     Step 3: Reviewer      │ (🤝 Multi-Reviewer Consensus)
                 └─────────────┬─────────────┘
                               │
                               ▼
                 ┌───────────────────────────┐
-                │    Step 4: Synthesizer    │ (Blends designs -> [💾 Auto Snapshot])
+                │    Step 4: Synthesizer    │ (Blends best designs)
                 └─────────────┬─────────────┘
                               │
-                  [ 🖋️ Web Diff-Editor Approval ]
+                  [ 🖋️ Monaco Diff-Editor Approval ]
                               │
                      [ ✨ Auto-Formatting ]
                               │
                               ▼
                 ┌───────────────────────────┐
-                │  Step 5: Test Execution   │ (Auto-Package Install -> DOCKER Sandbox)
+                │  Step 5: Test Execution   │ (DOCKER Sandbox)
                 └─────────────┬─────────────┘
-                              │
-                       [ 👁️ Visual QA ] (Playwright screenshots -> Vision Model)
                               │
                     ┌─────────┴─────────┐
              Tests Failed         Tests Passed
                     │                   │
                     ▼                   ▼
-        ┌───────────────────────┐  [ 🐙 Git Autopilot ] (Auto Branch, Commit, PR)
+        ┌───────────────────────┐  [ 🏎️ Performance Benchmark ]
         │   Step 6: Debugger    │           │
-        │  (Surgical Patching)  │           ▼
-        └───────────┬───────────┘    [Completed Project] (Traced with OpenTelemetry)
-                    ▲                       │
-                    └──(Fixes code and retries)
+        │  (Surgical Patching)  │  [ 🛡️ Security SAST Audit ]
+        └───────────┬───────────┘           │
+                    ▲              [ 📚 Self-Healing Docs ]
+                    └──(Retries)            │
+                                   [ 🐙 Git Autopilot ] (PR)
 ```
 
 ---
 
-## 💻 Installation
+## 💻 Elite Installation
 
 ```bash
-# Clone the repo and install
 git clone https://github.com/Sm0keHokage/MultiCliSwarm.git
 cd MultiCliSwarm
-pip install -e .
+pip install -e .[dev]
 ```
 
-### Docker Deployment
-Run the entire ecosystem (Web UI + Services) with one command:
+### 🐳 The One-Command Cloud
 ```bash
 docker-compose up --build
 ```
 
 ---
 
-## ⚙️ Usage
+## ⚙️ Elite Usage
 
-### Terminal CLI
-```bash
-multicliswarm \
-  --task "Implement a secure rate-limiter middleware in Go." \
-  --language "go" \
-  --auto-route \
-  --semantic-rag \
-  --telemetry
-```
-
-### Team Dashboard
+### Launch the Dashboard
 ```bash
 multicliswarm-ui
+```
+Open your browser to http://127.0.0.1:8080 to experience the **Live Collaboration Chat** and **Architecture Visualizer**.
+
+### Production CLI
+```bash
+multicliswarm \
+  --task "Implement a zero-trust auth microservice." \
+  --language "go" \
+  --security-audit \
+  --performance-bench \
+  --auto-docs \
+  --telemetry
 ```
