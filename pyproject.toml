@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "multicliswarm"
+version = "0.1.0"
+description = "A Multi-CLI cooperative agent swarm using Theory of Decision Making and Game Theory."
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Denis Sipicyn", email = "dshp@themezex.ru"}
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = []
+
+[project.scripts]
+multicliswarm = "multicliswarm.cli:main"
