@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "multicliswarm"
-version = "0.1.0"
+version = "0.2.0"
 description = "A Multi-CLI cooperative agent swarm using Theory of Decision Making and Game Theory."
 readme = "README.md"
 requires-python = ">=3.8"
@@ -17,7 +17,14 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
-dependencies = []
+dependencies = [
+    "pydantic>=2.0.0",
+    "mcp>=0.1.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0"
+]
 
 [project.scripts]
 multicliswarm = "multicliswarm.cli:main"
+multicliswarm-mcp = "multicliswarm.mcp_server:main"
+multicliswarm-ui = "multicliswarm.web_ui:main"

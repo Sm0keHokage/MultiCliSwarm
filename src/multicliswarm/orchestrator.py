@@ -7,7 +7,9 @@ import logging
 from typing import List, Dict, Any, Callable, Optional
 from concurrent.futures import ThreadPoolExecutor
 
+from pydantic import ValidationError
 from .engines import get_engine, BaseEngine
+from .schemas import ArchitectResponse, estimate_cost
 
 logger = logging.getLogger("multicliswarm.orchestrator")
 
@@ -31,8 +33,14 @@ DEFAULT_EXTENSIONS = {
     "php": ".php"
 }
 
+# Supported docker images for safe execution
+DOCKER_IMAGES = {
+    "python": "python:3.11-alpine",
+    "javascript": "node:18-alpine",
+    "go": "golang:1.20-alpine",
+}
+
 def extract_json_from_text(text: str) -> Dict[str, Any]:
-    """Safely extracts JSON from model text, discarding markdown code block wrappers."""
     match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
     if match:
         text = match.group(1)
@@ -47,17 +55,39 @@ def extract_json_from_text(text: str) -> Dict[str, Any]:
         raise e
 
 def clean_code(code: str, language: str = "python") -> str:
-    """Strips markdown code wrappers (e.g. ```python, ```js, etc.) if present."""
     lang_clean = language.lower().strip()
-    # Match any code block like ```python, ```javascript, ```go, etc.
     match = re.search(r'```(?:[a-zA-Z0-9+#-]+)?\s*(.*?)\s*```', code, re.DOTALL)
     if match:
         return match.group(1).strip()
     return code.strip()
 
+def run_in_docker(language: str, test_cmd: str, output_dir: str) -> subprocess.CompletedProcess:
+    """Executes the test command securely inside a Docker container."""
+    lang_clean = language.lower().strip()
+    image = DOCKER_IMAGES.get(lang_clean)
+    
+    if not image:
+        # Fallback to local if docker isn't configured for this language
+        logger.warning(f"No Docker image configured for '{language}'. Running locally.")
+        return subprocess.run(test_cmd, shell=True, capture_output=True, text=True, cwd=output_dir)
+        
+    abs_dir = os.path.abspath(output_dir)
+    docker_cmd = [
+        "docker", "run", "--rm",
+        "--network", "none",
+        "--memory", "512m",
+        "--cpus", "1.0",
+        "-v", f"{abs_dir}:/workspace:ro",
+        "-w", "/workspace",
+        image,
+        "sh", "-c", test_cmd
+    ]
+    
+    return subprocess.run(docker_cmd, capture_output=True, text=True)
+
 
 class SwarmOrchestrator:
-    """Core SDK orchestrator for the Multi-CLI agent swarm supporting any language."""
+    """Core SDK orchestrator for the Multi-CLI agent swarm supporting any language and safe execution."""
     
     def __init__(
         self,
@@ -71,18 +101,26 @@ class SwarmOrchestrator:
         debugger_engine: str = "gemini",
         debugger_model: Optional[str] = None,
         max_debug_cycles: int = 3,
+        use_docker: bool = False,
         callback: Optional[Callable[[str, str], None]] = None
     ):
+        self.architect_engine_name = architect_engine
         self.architect_engine = get_engine(architect_engine, architect_model)
         self.developer_engines_names = developer_engines or ["gemini", "codex"]
+        self.reviewer_engine_name = reviewer_engine
         self.reviewer_engine = get_engine(reviewer_engine, reviewer_model)
+        self.synthesizer_engine_name = synthesizer_engine
         self.synthesizer_engine = get_engine(synthesizer_engine, synthesizer_model)
+        self.debugger_engine_name = debugger_engine
         self.debugger_engine = get_engine(debugger_engine, debugger_model)
         self.max_debug_cycles = max_debug_cycles
+        self.use_docker = use_docker
         self.callback = callback
+        
+        # Financial tracking
+        self.total_cost = 0.0
 
     def _log(self, message: str, level: str = "info"):
-        """Internal logger that triggers logging and user-provided callback."""
         if level == "info":
             logger.info(message)
         elif level == "success":
@@ -95,6 +133,13 @@ class SwarmOrchestrator:
         if self.callback:
             self.callback(level, message)
 
+    def _track_cost(self, engine_name: str, prompt: str, response: str):
+        """Rudimentary token cost estimator (approx 4 chars = 1 token)."""
+        in_tokens = len(prompt) // 4
+        out_tokens = len(response) // 4
+        cost = estimate_cost(engine_name, in_tokens, out_tokens)
+        self.total_cost += cost
+
     def run(
         self,
         task: str,
@@ -103,31 +148,37 @@ class SwarmOrchestrator:
         override_filename: Optional[str] = None,
         test_cmd: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Runs the 5-phase MARE pipeline for the specified programming language and task."""
         lang_norm = language.lower().strip()
         self._log(f"Starting Multi-CLI Swarm for language: '{language}' and task: '{task}'")
+        self.total_cost = 0.0
         
         # --- 1. ARCHITECT ---
         self._log(f"Phase 1: Architect (Designing {language} system and tests)", "step")
+        schema_json = ArchitectResponse.model_json_schema()
         architect_prompt = f"""
         You are the Lead Architect in a cooperative software engineering swarm.
         Your task is to design a complete development plan and specification for the following request in {language}:
         "{task}"
         
-        You must output a single JSON object. The JSON object MUST contain exactly these keys:
-        1. "specification": A detailed markdown description of the components, function/class signatures, error handling, and expected behaviors.
-        2. "test_code": Complete, fully working unit test code in {language} designed to verify the correct behavior of the implementation. The tests must import/include the generated implementation file.
-        3. "filename": The recommended filename in {language} where the implementation should be saved.
-        
-        Ensure your output is valid JSON. Wrap the JSON object in a markdown json block if you prefer.
+        You MUST output a valid JSON object matching this schema exactly:
+        {json.dumps(schema_json, indent=2)}
         """
         
         arch_output_raw = self.architect_engine.execute(architect_prompt)
-        spec_data = extract_json_from_text(arch_output_raw)
+        self._track_cost(self.architect_engine_name, architect_prompt, arch_output_raw)
         
-        spec = spec_data.get("specification", "")
-        test_code = spec_data.get("test_code", "")
-        filename = override_filename or spec_data.get("filename", f"implementation{DEFAULT_EXTENSIONS.get(lang_norm, '.txt')}")
+        raw_dict = extract_json_from_text(arch_output_raw)
+        
+        try:
+            # Pydantic Phase 1 Validation
+            arch_response = ArchitectResponse(**raw_dict)
+        except ValidationError as e:
+            self._log(f"Architect JSON validation failed: {e}", "error")
+            raise RuntimeError(f"Architect returned invalid schema: {e}")
+            
+        spec = arch_response.specification
+        test_code = arch_response.test_code
+        filename = override_filename or arch_response.filename
         
         # Determine test filename
         ext = os.path.splitext(filename)[1]
@@ -136,7 +187,7 @@ class SwarmOrchestrator:
         if lang_norm == "go":
             test_filename = f"{base}_test.go"
         elif lang_norm == "rust":
-            test_filename = f"tests.rs" # typical or custom
+            test_filename = f"tests.rs"
             
         self._log(f"Architect generated specification. Filename target: {filename}", "success")
 
@@ -158,8 +209,9 @@ class SwarmOrchestrator:
             self._log(f"Developer {index+1} ({engine_name}) starting...")
             try:
                 engine = get_engine(engine_name)
-                code = engine.execute(dev_prompt)
-                code = clean_code(code, language)
+                code_raw = engine.execute(dev_prompt)
+                code = clean_code(code_raw, language)
+                self._track_cost(engine_name, dev_prompt, code_raw)
                 self._log(f"Developer {index+1} ({engine_name}) finished.", "success")
                 return {"index": index, "engine": engine_name, "code": code}
             except Exception as e:
@@ -206,6 +258,7 @@ class SwarmOrchestrator:
         """
         
         review_feedback = self.reviewer_engine.execute(reviewer_prompt)
+        self._track_cost(self.reviewer_engine_name, reviewer_prompt, review_feedback)
         self._log("Reviewer completed analysis.", "success")
 
         # --- 4. SYNTHESIZER ---
@@ -229,9 +282,9 @@ class SwarmOrchestrator:
         """
         
         final_code_raw = self.synthesizer_engine.execute(synth_prompt)
+        self._track_cost(self.synthesizer_engine_name, synth_prompt, final_code_raw)
         final_code = clean_code(final_code_raw, language)
         
-        # Save implementation to target directory
         final_file_path = os.path.join(output_dir, filename)
         with open(final_file_path, "w") as f:
             f.write(final_code)
@@ -245,22 +298,18 @@ class SwarmOrchestrator:
             f.write(test_code_clean)
         self._log(f"Unit tests saved to {test_file_path}.", "success")
         
-        # Build test command
         raw_test_cmd = test_cmd or DEFAULT_TEST_CMDS.get(lang_norm, "echo 'No test command specified'")
         cmd_to_run = raw_test_cmd.format(test_filename=test_filename, filename=filename)
         
         tests_passed = False
         for cycle in range(1, self.max_debug_cycles + 1):
             self._log(f"Validation Cycle {cycle} of {self.max_debug_cycles}...")
-            self._log(f"Running test command: {cmd_to_run}")
+            self._log(f"Running test command: {cmd_to_run} (Docker: {self.use_docker})")
             
-            test_result = subprocess.run(
-                cmd_to_run,
-                shell=True,
-                capture_output=True,
-                text=True,
-                cwd=output_dir
-            )
+            if self.use_docker:
+                test_result = run_in_docker(language, cmd_to_run, output_dir)
+            else:
+                test_result = subprocess.run(cmd_to_run, shell=True, capture_output=True, text=True, cwd=output_dir)
             
             if test_result.returncode == 0:
                 self._log(f"All tests PASSED successfully in cycle {cycle}!", "success")
@@ -298,6 +347,7 @@ class SwarmOrchestrator:
                 
                 try:
                     fixed_code_raw = self.debugger_engine.execute(debug_prompt)
+                    self._track_cost(self.debugger_engine_name, debug_prompt, fixed_code_raw)
                     final_code = clean_code(fixed_code_raw, language)
                     with open(final_file_path, "w") as f:
                         f.write(final_code)
@@ -306,6 +356,8 @@ class SwarmOrchestrator:
                     self._log(f"Debugger execution failed: {e}. Exiting debug loop.", "error")
                     break
 
+        self._log(f"Total Swarm Cost Estimate: ${self.total_cost:.5f} USD", "info")
+
         return {
             "success": tests_passed,
             "filename": filename,
@@ -313,5 +365,6 @@ class SwarmOrchestrator:
             "test_filename": test_filename,
             "test_code": test_code_clean,
             "specification": spec,
-            "review": review_feedback
+            "review": review_feedback,
+            "cost_usd": self.total_cost
         }
